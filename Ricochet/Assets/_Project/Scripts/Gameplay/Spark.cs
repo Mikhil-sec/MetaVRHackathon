@@ -48,6 +48,25 @@ namespace Ricochet.Gameplay
         public float GravityAcceleration => Physics.gravity.magnitude * _gravityScale;
         public bool FloorEndsShot { get => _floorEndsShot; set => _floorEndsShot = value; }
         public SparkRibbon Ribbon => _ribbon;
+        /// <summary>Halo size multiplier while held (SlingFx: hover brightening and pull charge-up).</summary>
+        public float HoldGlow { get; set; } = 1f;
+        /// <summary>Halo size multiplier in flight (ShotDrama: the Spark swells as it closes on the deciding crystal).</summary>
+        public float FlightGlow { get; set; } = 1f;
+
+        static readonly int HeatId = Shader.PropertyToID("_Heat");
+        MaterialPropertyBlock _heatBlock;
+        Renderer _visualRenderer;
+
+        /// <summary>Chain heat 0..1: the trail and the core's rim shift from cyan toward gold.</summary>
+        public void SetHeat(float heat)
+        {
+            heat = Mathf.Clamp01(heat);
+            if (_ribbon != null) _ribbon.SetHeat(heat);
+            if (_visualRenderer == null) return;
+            _heatBlock ??= new MaterialPropertyBlock();
+            _heatBlock.SetFloat(HeatId, heat);
+            _visualRenderer.SetPropertyBlock(_heatBlock);
+        }
 
         public event Action<Spark, Crystal> CrystalHit;
         public event Action<Spark, Vector3, Vector3> RoomBounced;
@@ -62,7 +81,11 @@ namespace Ricochet.Gameplay
             _body.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
             _body.mass = 0.01f;
             gameObject.layer = Layers.Spark;
-            if (_visual != null) _visualScale = _visual.localScale;
+            if (_visual != null)
+            {
+                _visualScale = _visual.localScale;
+                _visualRenderer = _visual.GetComponent<Renderer>();
+            }
             if (_halo != null) _haloScale = _halo.localScale;
         }
 
@@ -96,7 +119,9 @@ namespace Ricochet.Gameplay
 
             if (_halo != null)
             {
-                float pulse = InFlight ? 1.2f + 0.6f * _squashStrength * _squash : 1f + 0.1f * Mathf.Sin(Time.time * 2.4f);
+                float pulse = InFlight
+                    ? (1.2f + 0.6f * _squashStrength * _squash) * FlightGlow
+                    : (1f + 0.1f * Mathf.Sin(Time.time * 2.4f)) * HoldGlow;
                 _halo.localScale = _haloScale * pulse;
             }
         }
@@ -130,6 +155,7 @@ namespace Ricochet.Gameplay
             _body.linearVelocity = velocity;
             _body.angularVelocity = Vector3.zero;
             if (_ribbon != null) { _ribbon.Clear(); _ribbon.Emitting = true; }
+            SetHeat(0f);
             LastEnd = EndReason.None;
             InFlight = true;
         }

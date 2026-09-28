@@ -27,6 +27,13 @@ namespace Ricochet.Gameplay
         [SerializeField] float _aimSmoothing = 18f;
         [SerializeField] float _trackingGrace = 0.25f;
         [SerializeField] float _idleBobAmplitude = 0.006f;
+        [Tooltip("Release jitter: opening the fingers drags the pinch point before the pinch ends. Fire with the aim this many real seconds before release.")]
+        [SerializeField] float _releaseLookback = 0.08f;
+
+        const int HistorySize = 32; // ~0.35 s at 90 Hz, more than the lookback needs
+        readonly Vector3[] _pullHistory = new Vector3[HistorySize];
+        readonly float[] _pullTimes = new float[HistorySize];
+        int _historyHead, _historyCount;
 
         readonly List<IPinchInput> _inputs = new();
         State _state = State.Empty;
@@ -40,6 +47,23 @@ namespace Ricochet.Gameplay
         public event Action Cancelled;
 
         public float PullFraction => _state == State.Pulling ? Mathf.Clamp01(_smoothedPull.magnitude / _maxPull) : 0f;
+
+        // Read-only state for the feedback layer (SlingFx).
+        public IReadOnlyList<IPinchInput> Inputs => _inputs;
+        public bool IsReady => _state == State.Ready;
+        public bool IsPulling => _state == State.Pulling;
+        public float GrabRadius => _grabRadius;
+        /// <summary>The input holding the Spark while pulling, else null.</summary>
+        public IPinchInput ActiveInput => _state == State.Pulling ? _active : null;
+        /// <summary>Anchor minus the smoothed pinch point (the band's stretch). Still valid during Launched.</summary>
+        public Vector3 PullVector => _smoothedPull;
+        /// <summary>Launch power 0..1: 0 below the minimum pull (a release there cancels).</summary>
+        public float Charge => Mathf.InverseLerp(_minPull, _maxPull, _smoothedPull.magnitude);
+        public bool AboveMinPull => _smoothedPull.magnitude >= _minPull;
+        /// <summary>While ready: 0 with no tracked hand near, 1 when a pinch would grab (eases in from 4x reach).</summary>
+        public float HoverProximity { get; private set; }
+        /// <summary>While ready: the nearest tracked input is within grab reach.</summary>
+        public bool InReach { get; private set; }
 
         public void AddInput(IPinchInput input)
         {
@@ -68,6 +92,18 @@ namespace Ricochet.Gameplay
         {
             _spark.Hold(transform.position + Vector3.up * Mathf.Sin(Time.time * 2.4f) * _idleBobAmplitude);
 
+            // Hover: how close the nearest real reach (hand/controller, not the mouse) is to the anchor.
+            float nearest = float.PositiveInfinity;
+            for (int i = 0; i < _inputs.Count; i++)
+            {
+                var input = _inputs[i];
+                if (float.IsInfinity(input.ReachScale) || !input.IsTracked) continue;
+                float reach = _grabRadius * input.ReachScale;
+                nearest = Mathf.Min(nearest, Vector3.Distance(input.PinchPoint, transform.position) / reach);
+            }
+            InReach = nearest <= 1f;
+            HoverProximity = float.IsInfinity(nearest) ? 0f : 1f - Mathf.InverseLerp(1f, 4f, nearest);
+
             for (int i = 0; i < _inputs.Count; i++)
             {
                 var input = _inputs[i];
@@ -81,8 +117,11 @@ namespace Ricochet.Gameplay
 
                 _active = input;
                 _smoothedPull = Vector3.zero;
+                _historyCount = 0;
                 _lostTime = 0f;
                 _state = State.Pulling;
+                HoverProximity = 0f;
+                InReach = false;
                 Grabbed?.Invoke();
                 return;
             }
@@ -112,9 +151,43 @@ namespace Ricochet.Gameplay
 
             if (!_active.IsPinching)
             {
-                if (_smoothedPull.magnitude >= _minPull) Fire(velocity);
+                // Aim from just before the fingers started opening, not the dragged last frames.
+                Vector3 lastPull = _smoothedPull;
+                _smoothedPull = PullAt(Time.unscaledTime - _releaseLookback);
+                if (_smoothedPull.magnitude >= _minPull)
+                {
+                    Vector3 v = LaunchVelocity();
+                    // One line per real shot (never per sweep shot): how much the release drag would have bent the aim.
+                    Debug.Log($"[Ricochet] Launch: pull {_smoothedPull.magnitude:F3} m, dir {v.normalized:F2}, " +
+                              $"release drag {Vector3.Angle(lastPull, _smoothedPull):F1} deg");
+                    Fire(v);
+                }
                 else Cancel();
+                return;
             }
+            RecordPull();
+        }
+
+        void RecordPull()
+        {
+            _pullHistory[_historyHead] = _smoothedPull;
+            _pullTimes[_historyHead] = Time.unscaledTime;
+            _historyHead = (_historyHead + 1) % HistorySize;
+            if (_historyCount < HistorySize) _historyCount++;
+        }
+
+        /// <summary>The newest recorded pull at or before a real time (the oldest one if none is that old).</summary>
+        Vector3 PullAt(float time)
+        {
+            if (_historyCount == 0) return _smoothedPull;
+            Vector3 result = _smoothedPull;
+            for (int k = 1; k <= _historyCount; k++)
+            {
+                int i = (_historyHead - k + HistorySize) % HistorySize;
+                result = _pullHistory[i];
+                if (_pullTimes[i] <= time) break;
+            }
+            return result;
         }
 
         Vector3 LaunchVelocity() =>
@@ -145,6 +218,7 @@ namespace Ricochet.Gameplay
         void Cancel()
         {
             if (_preview != null) _preview.Hide();
+            _smoothedPull = Vector3.zero;
             _state = State.Ready;
             Cancelled?.Invoke();
         }

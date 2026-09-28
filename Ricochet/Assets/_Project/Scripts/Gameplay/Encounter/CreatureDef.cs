@@ -31,12 +31,21 @@ namespace Ricochet.Gameplay
         public int Hp;
         public float Size;
         public Intent[] Cycle;
+        // Silhouette: the tendril skirt is what tells the roster apart at a glance (body-local units, body ~1 tall).
+        public int Tendrils = 5;
+        public float TendrilLength = 0.9f;
+        public float TendrilWidth = 0.07f;
+        public int Seed = 1;
 
         public static readonly CreatureDef[] Roster =
         {
-            new() { Name = "Wisp", Hp = 16, Size = 0.24f, Cycle = new[] { A(3), A(4), G(4) } },
-            new() { Name = "Shade", Hp = 24, Size = 0.28f, Cycle = new[] { A(4), H(3), A(5), G(5) } },
-            new() { Name = "Maw", Hp = 32, Size = 0.32f, Cycle = new[] { G(6), A(6), H(4), A(7) } },
+            // Wisp: a few short, fine wisps. Shade: many long streamers. Maw: a heavy, stubby fringe.
+            new() { Name = "Wisp", Hp = 16, Size = 0.24f, Cycle = new[] { A(3), A(4), G(4) },
+                    Tendrils = 5, TendrilLength = 0.8f, TendrilWidth = 0.11f, Seed = 3 },
+            new() { Name = "Shade", Hp = 24, Size = 0.28f, Cycle = new[] { A(4), H(3), A(5), G(5) },
+                    Tendrils = 7, TendrilLength = 1.35f, TendrilWidth = 0.09f, Seed = 5 },
+            new() { Name = "Maw", Hp = 32, Size = 0.32f, Cycle = new[] { G(6), A(6), H(4), A(7) },
+                    Tendrils = 4, TendrilLength = 0.65f, TendrilWidth = 0.18f, Seed = 8 },
         };
 
         /// <summary>Encounter n of a run (0-based): cycles the roster and toughens each lap.</summary>
@@ -49,7 +58,12 @@ namespace Ricochet.Gameplay
             var cycle = new Intent[baseDef.Cycle.Length];
             for (int i = 0; i < cycle.Length; i++)
                 cycle[i] = new Intent(baseDef.Cycle[i].Kind, Mathf.RoundToInt(baseDef.Cycle[i].Amount * k));
-            return new CreatureDef { Name = baseDef.Name, Hp = Mathf.RoundToInt(baseDef.Hp * k), Size = baseDef.Size, Cycle = cycle };
+            return new CreatureDef
+            {
+                Name = baseDef.Name, Hp = Mathf.RoundToInt(baseDef.Hp * k), Size = baseDef.Size, Cycle = cycle,
+                Tendrils = baseDef.Tendrils, TendrilLength = baseDef.TendrilLength, TendrilWidth = baseDef.TendrilWidth,
+                Seed = baseDef.Seed,
+            };
         }
 
         static Intent A(int n) => new(IntentKind.Attack, n);

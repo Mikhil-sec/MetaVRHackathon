@@ -29,5 +29,7 @@ Material:
     - _Open: 1
     m_Colors:
     - _Color: {r: 1, g: 0.24999997, b: 0.8, a: 1}
+    - _NebulaColor: {r: 0.45, g: 0.079999976, b: 0.6, a: 1}
+    - _VoidColor: {r: 0.03, g: 0.005, b: 0.06999998, a: 1}
   m_BuildTextureStacks: []
   m_AllowLocking: 1

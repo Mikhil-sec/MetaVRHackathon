@@ -126,6 +126,38 @@ namespace Ricochet.Audio
             return clip;
         }
 
+        /// <summary>
+        /// Karplus-Strong plucked string: a noise burst circulating through a damped delay line one period long.
+        /// Low damping rings like a taut band (the release twang); high damping gives a muted tick (the pull ratchet).
+        /// Brightness 0..1 sets how much the loop filter dulls each pass.
+        /// </summary>
+        public static AudioClip Pluck(string name, float frequency, float seconds, float damping, float brightness, int seed = 5)
+        {
+            int samples = Mathf.CeilToInt(seconds * SampleRate);
+            var data = new float[samples];
+            var rng = new System.Random(seed);
+            int period = Mathf.Max(2, Mathf.RoundToInt(SampleRate / frequency));
+            var line = new float[period];
+            for (int i = 0; i < period; i++) line[i] = (float)(rng.NextDouble() * 2.0 - 1.0);
+            float blend = Mathf.Lerp(0.5f, 0.05f, Mathf.Clamp01(brightness)); // weight of the previous sample
+            float loss = Mathf.Exp(-damping / frequency);                       // per-period energy loss
+            int p = 0;
+            float prev = 0f;
+            for (int i = 0; i < samples; i++)
+            {
+                float cur = line[p];
+                float next = (cur * (1f - blend) + prev * blend) * loss;
+                prev = cur;
+                line[p] = next;
+                p = (p + 1) % period;
+                float t = (float)i / SampleRate;
+                data[i] = cur * Mathf.Clamp01((seconds - t) / 0.03f) * 0.45f;
+            }
+            var clip = AudioClip.Create(name, samples, 1, SampleRate, false);
+            clip.SetData(data, 0);
+            return clip;
+        }
+
         /// <summary>A bright, long crash: high-passed noise plus a shimmer of inharmonic partials.</summary>
         public static AudioClip Crash(string name, float seconds = 2.2f)
         {

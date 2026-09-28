@@ -26,6 +26,8 @@ namespace Ricochet.Input
 
         public bool IsTracked => Mouse.current != null;
         public float ReachScale => float.PositiveInfinity;
+        public bool IsHand => false;
+        public float PinchStrength => Mouse.current != null && Mouse.current.leftButton.isPressed ? 1f : 0f;
 
         public bool IsPinching
         {

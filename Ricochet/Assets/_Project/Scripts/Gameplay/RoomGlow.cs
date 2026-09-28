@@ -13,6 +13,8 @@ namespace Ricochet.Gameplay
 
         static readonly int SourcesId = Shader.PropertyToID("_GlowSources");
         static readonly int ColorsId = Shader.PropertyToID("_GlowColors");
+        static readonly int WaveId = Shader.PropertyToID("_GlowWave");
+        static readonly int WaveColorId = Shader.PropertyToID("_GlowWaveColor");
 
         struct Flash
         {
@@ -36,6 +38,11 @@ namespace Ricochet.Gameplay
         float _sparkIntensity;
         Vector4 _steadySource;
         Color _steadyColor;
+        // The wave: one light front at a time, sweeping out across the room (Fever). Real time, so it keeps its pace
+        // through the victory hit-stop.
+        Vector3 _waveOrigin;
+        Color _waveColor;
+        float _waveRadius, _waveSpeed, _waveWidth, _waveMax = -1f;
 
         public static RoomGlow Instance { get; private set; }
 
@@ -68,6 +75,20 @@ namespace Ricochet.Gameplay
                 if (progress > oldest) { oldest = progress; slot = i; }
             }
             _flashes[slot] = new Flash { Position = position, Color = color, Radius = radius, Duration = duration };
+        }
+
+        /// <summary>
+        /// A front of light racing out from a point across every real surface (the room-wide Fever wave).
+        /// It fades as it nears maxRadius. A new wave replaces a running one.
+        /// </summary>
+        public void Wave(Vector3 origin, Color color, float speed, float width, float maxRadius)
+        {
+            _waveOrigin = origin;
+            _waveColor = color;
+            _waveSpeed = speed;
+            _waveWidth = width;
+            _waveMax = maxRadius;
+            _waveRadius = 0f;
         }
 
         /// <summary>A light that stays until changed (the owner animates it). Color black switches it off.</summary>
@@ -110,6 +131,17 @@ namespace Ricochet.Gameplay
             }
             _sources[MaxGlows - 1] = _steadySource;
             _colors[MaxGlows - 1] = _steadyColor;
+
+            Color wave = Color.clear;
+            if (_waveMax > 0f)
+            {
+                _waveRadius += _waveSpeed * realDt;
+                float k = _waveRadius / _waveMax;
+                if (k >= 1f) _waveMax = -1f;
+                else wave = _waveColor * (1f - k * k);
+            }
+            Shader.SetGlobalVector(WaveId, new Vector4(_waveOrigin.x, _waveOrigin.y, _waveOrigin.z, _waveRadius));
+            Shader.SetGlobalVector(WaveColorId, new Vector4(wave.r, wave.g, wave.b, _waveWidth));
 
             Publish();
         }

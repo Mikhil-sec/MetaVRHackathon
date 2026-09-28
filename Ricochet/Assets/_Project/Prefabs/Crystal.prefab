@@ -129,3 +129,7 @@ MonoBehaviour:
   _idleColor: {r: 0.55, g: 0.35, b: 1, a: 1}
   _litColor: {r: 1, g: 0.8, b: 0.35, a: 1}
   _corruptColor: {r: 0.55, g: 0.04, b: 0.16, a: 1}
+  _goldColor: {r: 1, g: 0.72, b: 0.2, a: 1}
+  _prismColor: {r: 0.85, g: 0.9, b: 1, a: 1}
+  _bombColor: {r: 1, g: 0.3, b: 0.12, a: 1}
+  _ampColor: {r: 0.2, g: 0.95, b: 0.85, a: 1}

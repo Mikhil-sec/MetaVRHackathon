@@ -65,7 +65,61 @@ namespace Ricochet.Dev
             return "released";
         }
 
+        /// <summary>Stages the Fever light wave from the creature (slow it down to capture it mid-sweep).</summary>
+        public static string Wave(float speed = 3.2f)
+        {
+            var creature = Object.FindAnyObjectByType<Creature>();
+            Vector3 at = creature != null ? creature.Center : Vector3.forward * 3f;
+            RoomGlow.Instance.Wave(at, new Color(1.6f, 1.15f, 0.5f), speed, 0.16f, 9f);
+            return "wave from " + at.ToString("F1");
+        }
+
         public static string TimeLogSummary() => s_timeLog != null ? s_timeLog.Summary() : "not recording";
+
+        /// <summary>
+        /// Fires a full-power ballistic shot straight at the nearest unlit crystal of a type ("Gold", "Amp", "Bomb",
+        /// "Prism"), leaving the rest of the board alone (so a Bomb has neighbours). Exercises the crystal types.
+        /// </summary>
+        public static string FireAtKind(string kind)
+        {
+            var board = Object.FindAnyObjectByType<BoardGenerator>();
+            var sling = Object.FindAnyObjectByType<Sling>();
+            var spark = Object.FindAnyObjectByType<Spark>();
+            if (!System.Enum.TryParse(kind, true, out CrystalKind want)) return "unknown kind " + kind;
+            Vector3 origin = sling.transform.position;
+            Crystal target = null;
+            float best = float.MaxValue;
+            var active = board.Active;
+            for (int i = 0; i < active.Count; i++)
+            {
+                var c = active[i];
+                if (c.Kind != want || c.IsLit || c.IsPopped || c.IsCorrupt) continue;
+                float d = (c.transform.position - origin).sqrMagnitude;
+                if (d < best) { best = d; target = c; }
+            }
+            if (target == null) return "no " + want + " on the board";
+            Vector3 p = target.transform.position;
+            // Clear the lane: pop crystals near the flight line, but keep the target's neighbourhood (a Bomb's blast).
+            int cleared = 0;
+            for (int i = 0; i < active.Count; i++)
+            {
+                var c = active[i];
+                if (c == target || c.IsPopped) continue;
+                Vector3 q = c.transform.position;
+                if ((q - p).sqrMagnitude < 0.5f * 0.5f) continue;
+                Vector3 seg = p - origin;
+                float h = Mathf.Clamp01(Vector3.Dot(q - origin, seg) / seg.sqrMagnitude);
+                if ((origin + seg * h - q).sqrMagnitude < 0.15f * 0.15f) { c.Pop(); cleared++; }
+            }
+            float speed = sling.VelocityFor(Vector3.forward, 1f).magnitude;
+            Vector3 aim = p - origin;
+            for (int k = 0; k < 2; k++)
+            {
+                float t = (p - origin).magnitude / speed;
+                aim = p + Vector3.up * (0.5f * spark.GravityAcceleration * t * t) - origin;
+            }
+            return $"{want} at {Mathf.Sqrt(best):F2} m (cleared {cleared}), fired={sling.FireForTest(aim, 1f)}";
+        }
 
         /// <summary>
         /// Pops every crystal but the one nearest the sling's forward line, then fires a full-power shot aimed

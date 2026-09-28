@@ -40,7 +40,27 @@ Shader "Ricochet/Creature"
             UNITY_INSTANCING_BUFFER_START(Props)
                 UNITY_DEFINE_INSTANCED_PROP(float4, _Tint)
                 UNITY_DEFINE_INSTANCED_PROP(float, _Flash)
+                UNITY_DEFINE_INSTANCED_PROP(float, _Energy)
             UNITY_INSTANCING_BUFFER_END(Props)
+
+            float Hash(float3 p)
+            {
+                p = frac(p * 0.3183099 + 0.1);
+                p *= 17.0;
+                return frac(p.x * p.y * p.z * (p.x + p.y + p.z));
+            }
+
+            // One layer of stars "inside" the body: cells on a direction that parallaxes with the view.
+            float Stars(float3 dir, float density, float t)
+            {
+                float3 q = dir * density;
+                float3 cell = floor(q);
+                float h = Hash(cell);
+                float3 centre = cell + 0.5 + (float3(Hash(cell + 3.1), Hash(cell + 7.7), Hash(cell + 1.3)) - 0.5) * 0.6;
+                float d = length(q - centre);
+                float twinkle = 0.6 + 0.4 * sin(t * (2.0 + 3.0 * h) + h * 40.0);
+                return step(0.8, h) * saturate(1.0 - d * 2.8) * twinkle;
+            }
 
             struct Attributes
             {
@@ -89,9 +109,23 @@ Shader "Ricochet/Creature"
                 float facing = saturate(dot(n, v));
                 float fresnel = pow(1.0 - facing, _RimPower);
                 // Facets catch a little of the rim color so the silhouette has form, not a flat hole.
-                float facet = 0.12 * saturate(n.y * 0.5 + 0.5);
-                float3 rimColor = lerp(_RimColor.rgb, tint.rgb, 0.6);
-                float3 rgb = _InkColor.rgb + rimColor * (fresnel * 1.6 + facet);
+                float facet = 0.05 * saturate(n.y * 0.5 + 0.5);
+                float energy = UNITY_ACCESS_INSTANCED_PROP(Props, _Energy);
+                // Keep the magenta identity; the intent only colours the edge, and more so as it winds up.
+                float3 rimColor = lerp(_RimColor.rgb, tint.rgb, 0.35 + 0.4 * energy);
+                float3 rgb = _InkColor.rgb + rimColor * (fresnel * 1.3 + facet);
+
+                // The void inside: a star field seen through the ink, strongest face-on (it sits "behind" the rim).
+                // Pure view direction (no facet normal): a window into space, seamless across the facets.
+                float t = _Time.y;
+                float3 dirOS = normalize(mul((float3x3)UNITY_MATRIX_I_M, -v));
+                float stars = Stars(dirOS, 9.0, t) + Stars(dirOS + 0.37, 15.0, t) * 0.7 + Stars(dirOS - 0.61, 24.0, t) * 0.45;
+                rgb += float3(0.85, 0.8, 1.0) * stars * facing * 1.3;
+
+                // Rings of light rising through the body; they quicken and brighten as it winds up.
+                float band = frac(i.posOS.y * 3.2 - t * (0.35 + 1.4 * energy));
+                band = pow(1.0 - abs(band * 2.0 - 1.0), 10.0);
+                rgb += tint.rgb * band * (0.18 + 0.9 * energy) * (0.3 + 0.7 * facing);
                 rgb = lerp(rgb, float3(1.0, 0.9, 1.0) * 1.4, flash);
                 return half4(rgb, 1.0);
             }

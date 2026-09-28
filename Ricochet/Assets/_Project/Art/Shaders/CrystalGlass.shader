@@ -39,6 +39,7 @@ Shader "Ricochet/CrystalGlass"
                 UNITY_DEFINE_INSTANCED_PROP(float4, _BaseColor)
                 UNITY_DEFINE_INSTANCED_PROP(float, _Glow)
                 UNITY_DEFINE_INSTANCED_PROP(float, _Scale) // visual-only scale (pop-in, hit punch); colliders stay put
+                UNITY_DEFINE_INSTANCED_PROP(float, _Kind)  // 0 normal, 1 gold, 2 prism, 3 bomb, 4 amp (CrystalKind)
             UNITY_INSTANCING_BUFFER_END(Props)
 
             struct Attributes
@@ -54,6 +55,7 @@ Shader "Ricochet/CrystalGlass"
                 float3 positionWS : TEXCOORD0;
                 float3 normalWS : TEXCOORD1;
                 float height : TEXCOORD2; // 0 at the base, 1 at the tip
+                float phase : TEXCOORD3;  // per-crystal offset so specials never pulse in lockstep
                 UNITY_VERTEX_INPUT_INSTANCE_ID
                 UNITY_VERTEX_OUTPUT_STEREO
             };
@@ -69,6 +71,8 @@ Shader "Ricochet/CrystalGlass"
                 o.positionCS = TransformWorldToHClip(o.positionWS);
                 o.normalWS = TransformObjectToWorldNormal(v.normalOS);
                 o.height = saturate((v.positionOS.y + 0.45) / 1.55); // CrystalMesh spans y -0.45..1.1
+                float3 origin = UNITY_MATRIX_M._m03_m13_m23;
+                o.phase = frac(dot(origin, float3(3.1, 7.7, 5.3)));
                 return o;
             }
 
@@ -91,7 +95,38 @@ Shader "Ricochet/CrystalGlass"
                 float3 rim = lerp(_RimColor.rgb, 1.0.xxx, glow) * fresnel * (0.9 + 1.6 * glow);
                 // Lit: the body burns toward a hot white-gold.
                 float3 hot = lerp(core, baseColor.rgb * 1.6 + 0.35, glow);
-                return half4(hot + rim, 1.0);
+                float3 rgb = hot + rim;
+
+                // Specials: each type has one signature motion so it reads at a glance from the seat.
+                float kind = UNITY_ACCESS_INSTANCED_PROP(Props, _Kind);
+                float t = _Time.y + i.phase * 10.0;
+                if (kind > 0.5 && kind < 1.5)
+                {
+                    // Gold: bright glints sweeping up the facets, plus a warm inner burn.
+                    float sweep = pow(saturate(sin(i.height * 6.0 - t * 2.2)), 24.0);
+                    rgb *= float3(1.05, 0.82, 0.5);   // warm the lavender rim so it reads as metal-gold, not cream
+                    rgb += float3(1.0, 0.85, 0.5) * (sweep * 1.6 * facet + 0.15);
+                }
+                else if (kind > 1.5 && kind < 2.5)
+                {
+                    // Prism: iridescence. Hue shifts with the view angle and height, and slowly drifts.
+                    float h = frac(depth * 1.3 + i.height * 0.6 + t * 0.08);
+                    float3 hue = saturate(abs(frac(h + float3(0.0, 0.667, 0.333)) * 6.0 - 3.0) - 1.0);
+                    rgb = lerp(rgb, hue * (0.6 + 0.8 * facet) + fresnel * 0.8, 0.7 * (1.0 - glow * 0.5));
+                }
+                else if (kind > 2.5 && kind < 3.5)
+                {
+                    // Bomb: a fuse. The core throbs hot like a heartbeat.
+                    float beat = pow(0.5 + 0.5 * sin(t * 5.0), 6.0);
+                    rgb += float3(1.0, 0.45, 0.15) * beat * (1.0 - i.height * 0.5) * 1.2;
+                }
+                else if (kind > 3.5)
+                {
+                    // Amp: energy coils climbing the crystal.
+                    float coil = pow(abs(sin(i.height * 16.0 - t * 4.0)), 10.0);
+                    rgb += float3(0.4, 1.0, 0.9) * coil * 1.1;
+                }
+                return half4(rgb, 1.0);
             }
             ENDHLSL
         }

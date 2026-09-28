@@ -2,6 +2,20 @@ using UnityEngine;
 
 namespace Ricochet.Gameplay
 {
+    /// <summary>Crystal types (CONCEPT section 3). Normal is the common peg; the rest change the shot.</summary>
+    public enum CrystalKind
+    {
+        Normal,
+        /// <summary>Critical: its chain value counts double (score and damage).</summary>
+        Gold,
+        /// <summary>A fresh board after this shot.</summary>
+        Prism,
+        /// <summary>Area: lights every clean crystal around it as chain hits.</summary>
+        Bomb,
+        /// <summary>+1 to the multiplier for every later hit this shot.</summary>
+        Amp,
+    }
+
     /// <summary>
     /// A peg grown on a room surface. Hit once to light it (it stays solid, as in Peggle);
     /// lit crystals are popped in sequence when the shot ends.
@@ -12,6 +26,7 @@ namespace Ricochet.Gameplay
         static readonly int BaseColorId = Shader.PropertyToID("_BaseColor");
         static readonly int GlowId = Shader.PropertyToID("_Glow");
         static readonly int ScaleId = Shader.PropertyToID("_Scale");
+        static readonly int KindId = Shader.PropertyToID("_Kind");
 
         const float AppearSeconds = 0.35f;
         const float LitGlow = 0.7f;
@@ -30,6 +45,12 @@ namespace Ricochet.Gameplay
         float _highlight, _highlightTarget;
 
         [SerializeField] Color _corruptColor = new(0.55f, 0.04f, 0.16f);
+        [SerializeField] Color _goldColor = new(1f, 0.72f, 0.2f);
+        [SerializeField] Color _prismColor = new(0.85f, 0.9f, 1f);
+        [SerializeField] Color _bombColor = new(1f, 0.3f, 0.12f);
+        [SerializeField] Color _ampColor = new(0.2f, 0.95f, 0.85f);
+
+        public CrystalKind Kind { get; private set; }
 
         public bool IsLit { get; private set; }
         public bool IsPopped { get; private set; }
@@ -42,7 +63,7 @@ namespace Ricochet.Gameplay
             _spinSpeed = Random.Range(12f, 30f) * (Random.value < 0.5f ? -1f : 1f);
             _phase = Random.value * 10f;
             gameObject.layer = Layers.Crystal;
-            _block.SetColor(BaseColorId, _idleColor);
+            SetKind(CrystalKind.Normal);
             Apply(1f, 0f);
         }
 
@@ -55,8 +76,24 @@ namespace Ricochet.Gameplay
             _punch = 0f;
             _flash = 0f;
             _highlight = _highlightTarget = 0f;
-            _block.SetColor(BaseColorId, _idleColor);
+            SetKind(CrystalKind.Normal);
         }
+
+        public void SetKind(CrystalKind kind)
+        {
+            Kind = kind;
+            _block.SetColor(BaseColorId, IdleColor);
+            _block.SetFloat(KindId, (float)kind);
+        }
+
+        Color IdleColor => Kind switch
+        {
+            CrystalKind.Gold => _goldColor,
+            CrystalKind.Prism => _prismColor,
+            CrystalKind.Bomb => _bombColor,
+            CrystalKind.Amp => _ampColor,
+            _ => _idleColor,
+        };
 
         /// <summary>Grow in with an overshoot after a delay (board reveal). Visual only.</summary>
         public void Appear(float delay)
@@ -74,6 +111,7 @@ namespace Ricochet.Gameplay
             IsCorrupt = true;
             _punch = 1f;
             _block.SetColor(BaseColorId, _corruptColor);
+            _block.SetFloat(KindId, 0f); // a hex swallows the crystal's type
         }
 
         public void Light()
@@ -82,7 +120,8 @@ namespace Ricochet.Gameplay
             IsLit = true;
             _punch = 1f;
             _flash = 1f;
-            _block.SetColor(BaseColorId, _litColor);
+            // Specials burn in their own colour; normals turn gold.
+            _block.SetColor(BaseColorId, Kind == CrystalKind.Normal ? _litColor : Color.Lerp(IdleColor, Color.white, 0.25f));
         }
 
         public void Pop()
@@ -109,7 +148,9 @@ namespace Ricochet.Gameplay
                 ? _highlight * (0.6f + 0.4f * Mathf.Pow(0.5f + 0.5f * Mathf.Sin(Time.unscaledTime * 10.5f), 3f))
                 : 0f;
 
-            float scale = OutBack(_appear) * (1f + 0.45f * Mathf.Sin(_punch * Mathf.PI) * _punch) * (1f + 0.25f * beat);
+            // Specials render a touch larger so they read from the seat (visual only: the collider is unchanged).
+            float kindScale = Kind == CrystalKind.Normal || IsCorrupt ? 1f : 1.2f;
+            float scale = OutBack(_appear) * (1f + 0.45f * Mathf.Sin(_punch * Mathf.PI) * _punch) * (1f + 0.25f * beat) * kindScale;
             // Idle crystals shimmer faintly; lit ones flash white-hot, then burn steady.
             float glow = IsLit
                 ? Mathf.Lerp(LitGlow, 1f, _flash)

@@ -14,12 +14,19 @@ namespace Ricochet.Gameplay
         static readonly int TintId = Shader.PropertyToID("_Tint");
         static readonly int FlashId = Shader.PropertyToID("_Flash");
         static readonly int BaseColorId = Shader.PropertyToID("_BaseColor");
+        static readonly int EnergyId = Shader.PropertyToID("_Energy");
+        static readonly int ColorId = Shader.PropertyToID("_Color");
+        static readonly int KindId = Shader.PropertyToID("_Kind");
+        static readonly int IntensityId = Shader.PropertyToID("_Intensity");
 
         [SerializeField] Mesh _bodyMesh;
         [SerializeField] Mesh _shardMesh;
         [SerializeField] Material _bodyMaterial;
         [SerializeField] Material _eyeMaterial;
         [SerializeField] Material _barMaterial;
+        [SerializeField] Material _tendrilMaterial;
+        [SerializeField] Material _glyphMaterial;
+        [SerializeField] Color _armorColor = new(0.35f, 0.8f, 1f);
         [SerializeField] Color _hpColor = new(1f, 0.25f, 0.6f);
         [SerializeField] Color _chipColor = new(1f, 0.95f, 0.9f);
         [SerializeField] Color _barBackColor = new(0.06f, 0.02f, 0.08f);
@@ -30,6 +37,10 @@ namespace Ricochet.Gameplay
         readonly MeshRenderer[] _shardRenderers = new MeshRenderer[3];
         Transform _fill, _chip;
         MeshRenderer _fillRenderer, _chipRenderer, _backRenderer;
+        MeshRenderer _tendrilRenderer, _intentGlyph, _armorGlyph;
+        MeshFilter _tendrilFilter;
+        Transform _intentGlyphT;
+        float _intentPop;
         TextMeshPro _intentText, _armorText;
         MaterialPropertyBlock _block;
 
@@ -56,6 +67,10 @@ namespace Ricochet.Gameplay
         {
             _block = new MaterialPropertyBlock();
             _body = Child("Body", _bodyMesh, _bodyMaterial, out _bodyRenderer);
+            // Tendrils ride the body's transform, so they squash, swell and wobble with it.
+            var tendrils = Child("Tendrils", null, _tendrilMaterial, out _tendrilRenderer);
+            tendrils.SetParent(_body, false);
+            _tendrilFilter = tendrils.GetComponent<MeshFilter>();
             for (int i = 0; i < _shards.Length; i++) _shards[i] = Child("Shard" + i, _shardMesh, _bodyMaterial, out _shardRenderers[i]);
             _eyeL = Quad("EyeL", _eyeMaterial, transform, out _);
             _eyeR = Quad("EyeR", _eyeMaterial, transform, out _);
@@ -69,8 +84,16 @@ namespace Ricochet.Gameplay
             SetColor(_backRenderer, _barBackColor);
             SetColor(_chipRenderer, _chipColor);
             SetColor(_fillRenderer, _hpColor);
-            _intentText = Text("Intent", new Vector3(0f, 0.06f, 0f), 0.05f);
-            _armorText = Text("Armor", new Vector3(0f, -0.045f, 0f), 0.035f);
+            // Intent: an icon plus the number (zero text). Verified in a capture: HUD-local -x is the viewer's left,
+            // so the glyph sits left of centre and its number to the right.
+            _intentGlyphT = Quad("IntentGlyph", _glyphMaterial, _hud, out _intentGlyph);
+            _intentGlyphT.localPosition = new Vector3(-0.05f, 0.09f, 0f);
+            _intentText = Text("Intent", new Vector3(0.055f, 0.09f, 0f), 0.095f);
+            var armorGlyph = Quad("ArmorGlyph", _glyphMaterial, _hud, out _armorGlyph);
+            armorGlyph.localPosition = new Vector3(-0.03f, -0.045f, 0f);
+            armorGlyph.localScale = Vector3.one * 0.035f;
+            _armorText = Text("Armor", new Vector3(0.02f, -0.045f, 0f), 0.04f);
+            SetGlyph(_armorGlyph, 1f, _armorColor, 1.2f);
             gameObject.SetActive(false);
         }
 
@@ -84,6 +107,15 @@ namespace Ricochet.Gameplay
             renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             renderer.receiveShadows = false;
             return go.transform;
+        }
+
+        void SetGlyph(Renderer r, float kind, Color color, float intensity)
+        {
+            _block.Clear();
+            _block.SetFloat(KindId, kind);
+            _block.SetColor(ColorId, color);
+            _block.SetFloat(IntensityId, intensity);
+            r.SetPropertyBlock(_block);
         }
 
         static Transform Quad(string name, Material mat, Transform parent, out MeshRenderer renderer)
@@ -130,8 +162,9 @@ namespace Ricochet.Gameplay
             Armor = 0;
             // Keep its presence (~5-6 degrees) and its telegraph readable on far walls: grow with distance.
             float distance = viewer != null ? Vector3.Distance(viewer.position, home) : 2.6f;
-            _distanceScale = Mathf.Clamp(distance / 2.6f, 1f, 2f);
+            _distanceScale = Mathf.Clamp(distance / 2.6f, 1f, 2.4f);
             _size = def.Size * _distanceScale;
+            _tendrilFilter.sharedMesh = EncounterMeshes.Tendrils(def.Tendrils, def.TendrilLength, def.TendrilWidth, def.Seed);
             _from = riftPosition;
             _home = home;
             _viewer = viewer;
@@ -142,6 +175,7 @@ namespace Ricochet.Gameplay
             transform.position = riftPosition;
             gameObject.SetActive(true);
             _armorText.gameObject.SetActive(false);
+            _armorGlyph.enabled = false;
         }
 
         public void ShowIntent(Intent intent)
@@ -149,12 +183,10 @@ namespace Ricochet.Gameplay
             NextIntent = intent;
             _tint = intent.Color;
             _intentText.color = intent.Color;
-            switch (intent.Kind)
-            {
-                case IntentKind.Attack: _intentText.SetText("ATTACK {0}", intent.Amount); break;
-                case IntentKind.Guard: _intentText.SetText("GUARD {0}", intent.Amount); break;
-                default: _intentText.SetText("HEX {0}", intent.Amount); break;
-            }
+            _intentText.SetText("{0}", intent.Amount);
+            float kind = intent.Kind switch { IntentKind.Attack => 0f, IntentKind.Guard => 1f, _ => 2f };
+            SetGlyph(_intentGlyph, kind, intent.Color, 1.5f);
+            _intentPop = 1f; // a new intent pops in so the change is noticed
         }
 
         /// <summary>Armor soaks damage first. Returns the damage that reached HP.</summary>
@@ -183,8 +215,9 @@ namespace Ricochet.Gameplay
         void RefreshArmor()
         {
             _armorText.gameObject.SetActive(Armor > 0);
-            _armorText.color = new Color(0.35f, 0.8f, 1f);
-            _armorText.SetText("ARMOR {0}", Armor);
+            _armorGlyph.enabled = Armor > 0;
+            _armorText.color = _armorColor;
+            _armorText.SetText("{0}", Armor);
         }
 
         /// <summary>Anticipation before a move: it draws back and burns brighter (0..1, eased by the caller's timing).</summary>
@@ -259,7 +292,9 @@ namespace Ricochet.Gameplay
             _block.Clear();
             _block.SetColor(TintId, _tint * tintBoost);
             _block.SetFloat(FlashId, _flash);
+            _block.SetFloat(EnergyId, Mathf.Max(_windup, 0.6f * _lunge));
             _bodyRenderer.SetPropertyBlock(_block);
+            _tendrilRenderer.SetPropertyBlock(_block);
             for (int i = 0; i < _shardRenderers.Length; i++) _shardRenderers[i].SetPropertyBlock(_block);
 
             UpdateHud(dt, s, appear * dead);
@@ -275,6 +310,11 @@ namespace Ricochet.Gameplay
             if (_chipHold <= 0f) _chipShown = Mathf.Lerp(_chipShown, _hpShown, 1f - Mathf.Exp(-5f * dt));
             SetBar(_fill, _hpShown, 0.002f);
             SetBar(_chip, _chipShown, 0.001f);
+
+            // The intent glyph pops in on change and breathes with the windup, so the telegraph reads as "about to".
+            _intentPop = Mathf.Max(0f, _intentPop - dt * 3f);
+            float glyph = 0.11f * (1f + 0.5f * Mathf.Sin(_intentPop * Mathf.PI) + 0.25f * _windup * Mathf.Abs(Mathf.Sin(Time.time * 9f)));
+            _intentGlyphT.localScale = Vector3.one * glyph;
         }
 
         // Left-anchored bar segment, nudged toward the viewer (HUD-local -z) in front of the back plate.

@@ -26,7 +26,7 @@ Material:
     m_Ints: []
     m_Floats:
     - _Flash: 0
-    - _RimPower: 2.2
+    - _RimPower: 3.2
     - _Wobble: 0.012
     m_Colors:
     - _InkColor: {r: 0.035, g: 0.012, b: 0.059999965, a: 1}

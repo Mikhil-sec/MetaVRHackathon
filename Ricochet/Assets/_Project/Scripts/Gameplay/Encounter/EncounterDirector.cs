@@ -40,6 +40,8 @@ namespace Ricochet.Gameplay
         [SerializeField] Color _shieldHitGlow = new(2f, 0.25f, 0.2f);
         [SerializeField] Color _guardGlow = new(0.4f, 1.2f, 2f);
         [SerializeField] Color _victoryGlow = new(2.6f, 2f, 1.1f);
+        [SerializeField] Color _feverWave = new(1.6f, 1.15f, 0.5f);
+        [SerializeField] float _feverWaveSpeed = 3.2f; // m/s: a 5 m room sweeps in ~1.5 s
         [SerializeField] Color _burstColor = new(1f, 0.35f, 0.8f);
         [SerializeField] Color _shardColor = new(1f, 0.85f, 0.45f);
 
@@ -64,12 +66,14 @@ namespace Ricochet.Gameplay
 
         /// <summary>The next crystal hit would bank the finishing light (Peggle's "this peg wins" moment).</summary>
         public bool NextHitLethal => _creature.Alive && _director.ShotInProgress && !ShotLethal &&
-                                     _director.ShotLight + _director.Combo + 1 >= _creature.EffectiveHp;
+                                     _director.ShotLight + _director.NextHitValue >= _creature.EffectiveHp;
 
         void Awake()
         {
             Shield = _maxShield;
             _director.Intro = OpenEncounter;
+            // A killing shot opens the next encounter, which generates its own board: a Prism need not.
+            _director.WillRenewBoard = () => _creature.Alive && _director.ShotLight >= _creature.EffectiveHp;
             _director.TurnGate = Turn;
             _director.BoardShaper = ShapeBoard;
         }
@@ -86,6 +90,23 @@ namespace Ricochet.Gameplay
             _motes.Arrived -= OnMoteArrived;
         }
 
+        /// <summary>
+        /// Where the creature settles. Its intent is critical info, so it must sit inside the Glasses' +/-25 degree
+        /// band (TECH_GUIDE section 7) even when the rift uses the +/-30 degree tier: past 20 degrees it glides out of
+        /// the rift toward the centre of view (rotated about the eye) and a little nearer.
+        /// </summary>
+        Vector3 CreatureHome(Vector3 mouth)
+        {
+            const float maxYaw = 20f;
+            Vector3 eye = _playArea.Head.position;
+            Vector3 forward = Vector3.ProjectOnPlane(_playArea.Seat.forward, Vector3.up);
+            Vector3 to = mouth - eye;
+            float yaw = Vector3.SignedAngle(forward, Vector3.ProjectOnPlane(to, Vector3.up), Vector3.up);
+            if (Mathf.Abs(yaw) <= maxYaw) return mouth;
+            Quaternion swing = Quaternion.AngleAxis(Mathf.Clamp(yaw, -maxYaw, maxYaw) - yaw, Vector3.up);
+            return eye + swing * to * 0.85f;
+        }
+
         IEnumerator OpenEncounter()
         {
             _def = CreatureDef.ForEncounter(Encounter);
@@ -100,7 +121,7 @@ namespace Ricochet.Gameplay
             _sfx.PlayRiftOpen(place.Position);
             yield return Wait(0.9f);
 
-            _creature.Emerge(_def, place.Position, _rift.Mouth, _playArea.Head);
+            _creature.Emerge(_def, place.Position, CreatureHome(_rift.Mouth), _playArea.Head);
             _intentIndex = 0;
             yield return Wait(0.8f);
             _creature.ShowIntent(_def.Cycle[0]);
@@ -269,16 +290,26 @@ namespace Ricochet.Gameplay
             _rift.Seal();
             yield return WaitReal(0.4f);
 
-            // Fever: the room fills with light. Every crystal left shatters in a wave spreading out from the rift.
+            // Fever: a front of light races out from where the creature fell, across every real wall, and each crystal
+            // left shatters the moment the front reaches it. A rising swell carries it.
+            _glow.Wave(at, _feverWave, _feverWaveSpeed, 0.16f, 9f);
+            _sfx.PlaySwell(at);
             _scratch.Clear();
             var active = _board.Active;
             for (int i = 0; i < active.Count; i++)
                 if (!active[i].IsPopped) _scratch.Add(active[i]);
             _scratch.Sort((a, b) => (a.transform.position - at).sqrMagnitude.CompareTo((b.transform.position - at).sqrMagnitude));
+            float front = 0f; // distance the wave has covered so far
             for (int i = 0; i < _scratch.Count; i++)
             {
                 var c = _scratch[i];
                 Vector3 p = c.transform.position;
+                float d = Vector3.Distance(p, at);
+                if (d > front)
+                {
+                    yield return WaitReal((d - front) / _feverWaveSpeed);
+                    front = d;
+                }
                 c.Light();
                 c.Pop();
                 if (_fx != null) _fx.Burst(p, _shardColor);
@@ -286,7 +317,6 @@ namespace Ricochet.Gameplay
                 if (i % 2 == 0) _sfx.PlayComboNote(i / 2 % 15, p);
                 _director.AddScore(_feverPoints);
                 if (_popups != null && i % 3 == 0) _popups.Show(p, _feverPoints, Mathf.Min(i, 8));
-                yield return WaitReal(0.035f);
             }
             Vector3 center = _playArea.Seat.position + _playArea.Seat.forward * 2f;
             _glow.Pulse(center, _victoryGlow, 4f, 1.8f);

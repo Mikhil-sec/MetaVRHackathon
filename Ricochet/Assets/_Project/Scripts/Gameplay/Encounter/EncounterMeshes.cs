@@ -92,6 +92,64 @@ namespace Ricochet.Gameplay
             return s_creature;
         }
 
+        static readonly System.Collections.Generic.Dictionary<int, Mesh> s_tendrils = new();
+
+        /// <summary>
+        /// A skirt of tapered ribbon tendrils hanging from the underside of the body (body-local units: the body is
+        /// ~1 tall). Rest pose only: the Tendril shader sways them. uv = (across 0..1, along 0 root..1 tip);
+        /// uv2 = (phase, tendril 0..1). Ribbons lie across the body's local x, so the viewer (+z) never sees them edge-on.
+        /// Cached per shape; built once per roster member, never per frame.
+        /// </summary>
+        public static Mesh Tendrils(int count, float length, float width, int seed)
+        {
+            int key = (count * 1000 + Mathf.RoundToInt(length * 100f)) * 1000 + Mathf.RoundToInt(width * 1000f) + seed * 7919;
+            if (s_tendrils.TryGetValue(key, out var cached) && cached != null) return cached;
+
+            const int segments = 14;
+            int rows = segments + 1;
+            var rng = new System.Random(seed);
+            var verts = new Vector3[count * rows * 2];
+            var uvs = new Vector2[verts.Length];
+            var uv2 = new Vector2[verts.Length];
+            var tris = new int[count * segments * 6];
+            int v = 0, k = 0;
+            for (int i = 0; i < count; i++)
+            {
+                // Roots on the lower rim, fanned across the front half; the middle ones hang longest.
+                float f = count == 1 ? 0.5f : i / (count - 1f);
+                float spread = Mathf.Lerp(-1f, 1f, f);
+                var root = new Vector3(spread * 0.2f, -0.28f + 0.06f * Mathf.Abs(spread), 0.02f);
+                var dir = new Vector3(spread * 0.45f, -1f, -0.15f).normalized;
+                float len = length * (1f - 0.35f * Mathf.Abs(spread)) * (0.85f + 0.3f * (float)rng.NextDouble());
+                float phase = (float)rng.NextDouble() * 6.283f;
+                var side = Vector3.Cross(dir, Vector3.forward).normalized; // across the ribbon, in the viewer's plane
+                int start = v;
+                for (int r = 0; r < rows; r++)
+                {
+                    float t = r / (float)segments;
+                    // A slight outward curl so the silhouette reads as organic, not a comb.
+                    Vector3 c = root + dir * (len * t) + new Vector3(spread * 0.12f, 0f, 0f) * (t * t);
+                    float w = width * Mathf.Pow(1f - t, 0.8f) * 0.5f + 0.002f;
+                    verts[v] = c - side * w; uvs[v] = new Vector2(0f, t); uv2[v] = new Vector2(phase, f); v++;
+                    verts[v] = c + side * w; uvs[v] = new Vector2(1f, t); uv2[v] = new Vector2(phase, f); v++;
+                }
+                for (int r = 0; r < segments; r++)
+                {
+                    int a = start + r * 2, b = a + 2;
+                    tris[k++] = a; tris[k++] = b; tris[k++] = a + 1;
+                    tris[k++] = a + 1; tris[k++] = b; tris[k++] = b + 1;
+                }
+            }
+            var mesh = new Mesh { name = $"Tendrils{count}", vertices = verts, uv = uvs, uv2 = uv2, triangles = tris };
+            mesh.RecalculateBounds();
+            // Sway reaches ~0.25 body units at the tips: pad the bounds so the tips never cull at the screen edge.
+            var b0 = mesh.bounds;
+            b0.Expand(0.6f);
+            mesh.bounds = b0;
+            s_tendrils[key] = mesh;
+            return mesh;
+        }
+
         // Unit sphere, then a teardrop: narrower and pulled up toward the crown, a little flattened front to back.
         static Vector3 Shape(Vector3 p)
         {

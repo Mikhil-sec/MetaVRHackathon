@@ -16,6 +16,9 @@ namespace Ricochet.Audio
         AudioClip _launch;
         AudioClip _crash;
         AudioClip _riftOpen, _hurt, _bolt, _shieldHit, _guard;
+        AudioClip _grab, _twang, _cancel, _swell;
+        AudioClip[] _pullTicks;
+        public const int PullSteps = 6;
         AudioSource _drumroll;
         float _drumLevel;
 
@@ -48,6 +51,15 @@ namespace Ricochet.Audio
             _bolt = ChimeSynth.Sweep("Bolt", 180f, 720f, 0.4f, 0.7f, 3f, 13);
             _shieldHit = ChimeSynth.Sweep("ShieldHit", 110f, 48f, 0.5f, 0.35f, 6f, 14);
             _guard = ChimeSynth.Bell("Guard", ChimeSynth.NoteFrequency(RootMidi - 24, 3), 0.8f, 0.6f);
+
+            // The sling's voice (TECH_GUIDE section 6: sound replaces haptics). A taut band, plucked.
+            _grab = ChimeSynth.Pluck("Grab", ChimeSynth.NoteFrequency(RootMidi, 2), 0.35f, 9f, 0.8f, 21);
+            _twang = ChimeSynth.Pluck("Twang", ChimeSynth.NoteFrequency(RootMidi - 24, 0), 0.9f, 2.2f, 0.9f, 22);
+            _cancel = ChimeSynth.Sweep("Cancel", 520f, 260f, 0.22f, 0.15f, 9f, 23);
+            _swell = ChimeSynth.Sweep("Swell", 220f, 880f, 1.8f, 0.2f, 0.6f, 24);
+            _pullTicks = new AudioClip[PullSteps];
+            for (int n = 0; n < PullSteps; n++)
+                _pullTicks[n] = ChimeSynth.Pluck("PullTick" + n, ChimeSynth.NoteFrequency(RootMidi, n), 0.09f, 45f, 0.6f, 30 + n);
 
             // Tension bed for the last-crystal moment: non-diegetic, so it plays in the head rather than the room.
             var drum = new GameObject("Drumroll");
@@ -97,6 +109,17 @@ namespace Ricochet.Audio
             Play(_thud, position, Mathf.Clamp01(intensity) * 0.7f, Random.Range(0.92f, 1.08f) * Mathf.Lerp(0.6f, 1f, Time.timeScale));
 
         public void PlayLaunch(Vector3 position) => Play(_launch, position, 0.6f, 1f);
+
+        public void PlayGrab(Vector3 position) => Play(_grab, position, 0.7f, Random.Range(0.97f, 1.03f));
+        /// <summary>The pull ratchet: one rising pentatonic tick per step of stretch (0..PullSteps-1).</summary>
+        public void PlayPullTick(int step, Vector3 position) =>
+            Play(_pullTicks[Mathf.Clamp(step, 0, PullSteps - 1)], position, 0.35f + 0.06f * step, 1f);
+        /// <summary>The band snapping home on release; harder pulls ring higher and louder.</summary>
+        public void PlayTwang(Vector3 position, float charge) =>
+            Play(_twang, position, Mathf.Lerp(0.45f, 0.9f, charge), Mathf.Lerp(0.9f, 1.25f, charge));
+        public void PlayCancel(Vector3 position) => Play(_cancel, position, 0.4f, 1f);
+        /// <summary>The Fever swell: a bright rising sweep under the shattering wave.</summary>
+        public void PlaySwell(Vector3 position) => Play(_swell, position, 0.8f, 1f);
 
         public void PlayChord(Vector3 position)
         {

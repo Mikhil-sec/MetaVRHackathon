@@ -10,12 +10,15 @@ namespace Ricochet.Gameplay
     public sealed class Rift : MonoBehaviour
     {
         static readonly int OpenId = Shader.PropertyToID("_Open");
+        static readonly int SpreadId = Shader.PropertyToID("_Spread");
 
         [SerializeField] MeshRenderer _crack;
         [SerializeField] Transform _halo;
+        [SerializeField] MeshRenderer _web;
+        [SerializeField] float _webSpread = 0.75f;   // metres the wall fractures out to once fully open
         [SerializeField] RoomGlow _glow;
-        [SerializeField] float _height = 0.8f;
-        [SerializeField] float _width = 0.16f;
+        [SerializeField] float _height = 0.95f;
+        [SerializeField] float _width = 0.26f;  // wide enough that the void inside reads at 4-5 m
         [SerializeField] float _openSeconds = 1.1f;
         [SerializeField] float _sealSeconds = 0.5f;
         [SerializeField] Color _wallLight = new(1.1f, 0.25f, 0.8f);
@@ -81,6 +84,15 @@ namespace Ricochet.Gameplay
                 _crack.transform.localScale = new Vector3(width, _height * Mathf.Max(0.02f, length), 1f);
                 _block.SetFloat(OpenId, Mathf.Clamp01(_open * 2f) * (1f + _flare));
                 _crack.SetPropertyBlock(_block);
+            }
+            if (_web != null)
+            {
+                // The wall fractures outward as the crack splits (the tear), with a jolt on the opening flare;
+                // on the seal it pulls back in with the crack.
+                _block.Clear();
+                _block.SetFloat(SpreadId, _webSpread * (0.15f + 0.85f * split) * (1f + 0.25f * _flare));
+                _block.SetFloat(OpenId, Mathf.Clamp01(_open * 1.5f) * (1f + 0.6f * _flare));
+                _web.SetPropertyBlock(_block);
             }
             if (_halo != null) _halo.localScale = _haloScale * (0.3f + 0.7f * split + 0.8f * _flare) * breathe;
             if (_glow != null && gameObject.activeInHierarchy)

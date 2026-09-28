@@ -113,8 +113,34 @@ namespace Ricochet.Gameplay
                     TrySpawn(pos + normal * _surfaceOffset, normal);
             }
 
+            AssignKinds();
             Random.state = saved;
             return _active.Count;
+        }
+
+        /// <summary>
+        /// Sprinkles the special crystals (CONCEPT section 3) over a fresh board, deterministically from the board
+        /// seed: a few Gold (critical), a couple each of Amp and Bomb, and one Prism. Visual and scoring only; the
+        /// colliders are identical, so board physics and the sweep are untouched.
+        /// </summary>
+        void AssignKinds()
+        {
+            int n = _active.Count;
+            if (n < 12) return;
+            int gold = 3, amp = 2, bomb = 2, prism = 1;
+            // Fisher-Yates over indices with the board's own RNG: the same seed gives the same board.
+            var order = new int[n];
+            for (int i = 0; i < n; i++) order[i] = i;
+            for (int i = n - 1; i > 0; i--)
+            {
+                int j = _rng.Next(i + 1);
+                (order[i], order[j]) = (order[j], order[i]);
+            }
+            int k = 0;
+            for (int i = 0; i < gold; i++) _active[order[k++]].SetKind(CrystalKind.Gold);
+            for (int i = 0; i < amp; i++) _active[order[k++]].SetKind(CrystalKind.Amp);
+            for (int i = 0; i < bomb; i++) _active[order[k++]].SetKind(CrystalKind.Bomb);
+            for (int i = 0; i < prism; i++) _active[order[k++]].SetKind(CrystalKind.Prism);
         }
 
         /// <summary>

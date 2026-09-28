@@ -37,6 +37,15 @@ namespace Ricochet.Gameplay
         [SerializeField] Color _bounceGlow = new(0.6f, 1.7f, 2f);
         [SerializeField] Color _shardColor = new(1f, 0.85f, 0.45f);
         [SerializeField] Color _corruptGlow = new(0.9f, 0.1f, 0.35f);
+        [SerializeField] Color _ampGlow = new(0.4f, 2f, 1.8f);
+        [SerializeField] Color _bombGlow = new(2.4f, 0.9f, 0.3f);
+        [SerializeField] Color _prismGlow = new(1.6f, 1.4f, 2.2f);
+        [SerializeField] Color _focusGlow = new(0.9f, 2f, 2.2f);
+        [Tooltip("Optional: Focus (gaze). A hit on the focused crystal is a critical.")]
+        [SerializeField] GazeFocus _focus;
+
+        [Header("Crystal types")]
+        [SerializeField] float _bombRadius = 0.4f;
 
         [Header("Scoring")]
         [SerializeField] int _basePoints = 10;
@@ -44,6 +53,9 @@ namespace Ricochet.Gameplay
 
         readonly List<Crystal> _litThisShot = new();
         readonly List<int> _litValues = new();
+        readonly List<Crystal> _blast = new();
+        int _mult = 1;
+        bool _prismHit;
         WaitForSeconds _popWait;
         Rigidbody _sparkBody;
         int _combo;
@@ -68,6 +80,8 @@ namespace Ricochet.Gameplay
         public System.Func<IEnumerator> Intro;
         /// <summary>Optional: runs after each shot is scored, before the sling re-arms (the encounter's turn).</summary>
         public System.Func<IEnumerator> TurnGate;
+        /// <summary>Optional: true when the turn that follows will renew the board anyway (a Prism then skips its own).</summary>
+        public System.Func<bool> WillRenewBoard;
         /// <summary>Optional: adjusts a freshly generated board before it is announced; returns the crystal count.</summary>
         public System.Func<int> BoardShaper;
         /// <summary>Chain units of light banked this shot (each hit adds its chain value: 1, 2, 3...).</summary>
@@ -100,6 +114,9 @@ namespace Ricochet.Gameplay
         void OnRoomReady()
         {
             _sling.transform.position = SlingPosition(_playArea.Seat);
+            // Face the seat's forward so the band's posts sit left and right of the player (SlingFx).
+            Vector3 flat = Vector3.ProjectOnPlane(_playArea.Seat.forward, Vector3.up);
+            if (flat.sqrMagnitude > 1e-4f) _sling.transform.rotation = Quaternion.LookRotation(flat);
 
             if (_leftHand != null) _sling.AddInput(new HandPinchInput(_leftHand));
             if (_rightHand != null) _sling.AddInput(new HandPinchInput(_rightHand));
@@ -163,6 +180,8 @@ namespace Ricochet.Gameplay
         void OnLaunched(Vector3 velocity)
         {
             _combo = 0;
+            _mult = 1;
+            _prismHit = false;
             LastShotScore = 0;
             ShotInProgress = true;
             _litThisShot.Clear();
@@ -183,23 +202,82 @@ namespace Ricochet.Gameplay
                 _combo = 0;
                 _sfx.PlayBounce(crystal.transform.position, 1f);
                 if (_glow != null) _glow.Pulse(crystal.transform.position, _corruptGlow, 0.6f, 0.4f);
-                if (_spark.Ribbon != null) _spark.Ribbon.SetHeat(0f);
+                _spark.SetHeat(0f);
                 CrystalLit?.Invoke(crystal, -1);
                 return;
             }
-            _litValues.Add(1 + _combo);
+            // Chain value: its place in the chain, times the shot's Amp multiplier; Gold is a critical (x2).
+            Vector3 at = crystal.transform.position;
+            bool focused = _focus != null && crystal == _focus.Focused;   // Focus (gaze): another critical, stacking
+            int value = NextHitValue * (crystal.Kind == CrystalKind.Gold ? 2 : 1) * (focused ? 2 : 1);
+            if (focused)
+            {
+                Debug.Log($"[Ricochet] Focus critical: value {NextHitValue} -> x2");
+                _sfx.PlayChord(at);
+                if (_glow != null) _glow.Pulse(at, _focusGlow, 1.4f, 0.6f);
+                if (_fx != null) _fx.Burst(at, _focusGlow);
+            }
+            _litValues.Add(value);
 
-            int points = _basePoints * (1 + _combo);
+            int points = _basePoints * value;
             LastShotScore += points;
             Score += points;
-            _sfx.PlayComboNote(_combo, crystal.transform.position);
-            if (_popups != null) _popups.Show(crystal.transform.position, points, _combo);
+            _sfx.PlayComboNote(_combo, at);
+            if (_popups != null) _popups.Show(at, points, _combo);
             // Each hit in a chain throws a little more light onto the room.
-            if (_glow != null) _glow.Pulse(crystal.transform.position, _hitGlow * (1f + 0.25f * Mathf.Min(_combo, 6)), 0.9f, 0.45f);
+            if (_glow != null) _glow.Pulse(at, _hitGlow * (1f + 0.25f * Mathf.Min(_combo, 6)), 0.9f, 0.45f);
             _combo++;
             BestCombo = Mathf.Max(BestCombo, _combo);
-            if (_spark.Ribbon != null) _spark.Ribbon.SetHeat(_combo / 6f); // the trail heats toward gold with the chain
+            _spark.SetHeat(_combo / 6f); // the trail heats toward gold with the chain
             CrystalLit?.Invoke(crystal, _combo - 1);
+
+            switch (crystal.Kind)
+            {
+                case CrystalKind.Gold:
+                    _sfx.PlayChord(at); // a critical rings out
+                    if (_glow != null) _glow.Pulse(at, _popGlow * 1.3f, 1.3f, 0.6f);
+                    break;
+                case CrystalKind.Amp:
+                    _mult++;
+                    _sfx.PlayGuard(at);
+                    if (_glow != null) _glow.Pulse(at, _ampGlow, 1.6f, 0.7f);
+                    if (_fx != null) _fx.Burst(at, _ampGlow);
+                    break;
+                case CrystalKind.Prism:
+                    _prismHit = true;
+                    if (_glow != null) _glow.Pulse(at, _prismGlow, 1.8f, 0.8f);
+                    break;
+                case CrystalKind.Bomb:
+                    Detonate(spark, crystal);
+                    break;
+            }
+        }
+
+        /// <summary>The chain value the next clean hit would carry (before a Gold critical).</summary>
+        public int NextHitValue => (1 + _combo) * _mult;
+
+        /// <summary>A Bomb lights every clean crystal around it, each as the next hit in the chain.</summary>
+        void Detonate(Spark spark, Crystal bomb)
+        {
+            Vector3 at = bomb.transform.position;
+            _sfx.PlayShieldHit(at); // a low boom
+            if (_glow != null) _glow.Pulse(at, _bombGlow, _bombRadius * 3.5f, 0.9f);
+            if (_fx != null) { _fx.Burst(at, _bombGlow); _fx.Burst(at, _shardColor); }
+            var active = _board.Active;
+            // Collect first, onto a shared stack: lighting a neighbour Bomb detonates it too (a chain reaction),
+            // and that nested call pushes and pops its own segment above ours.
+            int start = _blast.Count;
+            float r2 = _bombRadius * _bombRadius;
+            for (int i = 0; i < active.Count; i++)
+            {
+                var c = active[i];
+                if (c == bomb || c.IsLit || c.IsPopped || c.IsCorrupt) continue;
+                if ((c.transform.position - at).sqrMagnitude <= r2) _blast.Add(c);
+            }
+            int end = _blast.Count;
+            for (int i = start; i < end; i++)
+                if (!_blast[i].IsLit) OnCrystalHit(spark, _blast[i]);
+            _blast.RemoveRange(start, end - start);
         }
 
         void OnRoomBounced(Spark spark, Vector3 point, Vector3 normal)
@@ -223,9 +301,20 @@ namespace Ricochet.Gameplay
                 CrystalPopped?.Invoke(at, _litValues[i]); // each hit carries its chain value in light (0 if hexed)
                 yield return _popWait;
             }
-            Debug.Log($"[Ricochet] Shot: {_litThisShot.Count} crystals, +{LastShotScore}, total {Score}");
+            Debug.Log($"[Ricochet] Shot: {_litThisShot.Count} crystals, +{LastShotScore}, total {Score}" +
+                      (_mult > 1 ? $", amp x{_mult}" : "") + (_prismHit ? ", prism" : ""));
             ShotInProgress = false;
             ShotScored?.Invoke(_litThisShot.Count, LastShotScore);
+
+            if (_prismHit && !(WillRenewBoard?.Invoke() ?? false))
+            {
+                // Prism: the board renews itself in a rainbow wash before the turn continues.
+                Vector3 center = _playArea.Seat.position + _playArea.Seat.forward * 2f;
+                if (_glow != null) _glow.Pulse(center, _prismGlow, 3.5f, 1.2f);
+                _sfx.PlayChord(center);
+                yield return new WaitForSeconds(0.5f);
+                NewBoard();
+            }
 
             if (TurnGate != null)
                 yield return TurnGate(); // the encounter resolves the turn (damage, the creature's move, board refresh)

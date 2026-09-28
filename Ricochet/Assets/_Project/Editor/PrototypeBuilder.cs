@@ -37,7 +37,7 @@ namespace Ricochet.EditorTools
             var particlesUnlit = Shader.Find("Universal Render Pipeline/Particles/Unlit");
 
             var crystalMat = Mat("Crystal", Shader.Find("Ricochet/CrystalGlass"), new Color(0.55f, 0.35f, 1f));
-            var sparkMat = Mat("Spark", unlit, new Color(0.75f, 0.95f, 1f));
+            var sparkMat = Mat("Spark", Shader.Find("Ricochet/SparkCore"), Color.white);
             var trailMat = Mat("SparkRibbon", Shader.Find("Ricochet/Ribbon"), Color.white);
             var aimMat = AdditiveMat("AimLine", particlesUnlit, new Color(1f, 1f, 1f, 0.6f));
             var roomGlowMat = Mat("RoomGlow", Shader.Find("Ricochet/RoomGlow"), Color.clear);
@@ -88,6 +88,7 @@ namespace Ricochet.EditorTools
             var preview = GetOrAdd<TrajectoryPreview>(previewGo);
             Set(sling, "_spark", spark);
             Set(sling, "_preview", preview);
+            BuildSlingFx(slingGo, sling, spark, sfx);
 
             var director = Fresh<ShotDirector>(game);
             Set(director, "_playArea", playArea);
@@ -102,7 +103,10 @@ namespace Ricochet.EditorTools
             Set(glow, "_spark", spark);
             Set(director, "_glow", glow);
             var fx = Fresh<ShatterFx>(game);
-            Set(fx, "_shardMaterial", AdditiveMat("Shard", particlesUnlit, new Color(1f, 0.9f, 0.6f, 1f)));
+            Set(fx, "_shardMaterial", Mat("Shard", Shader.Find("Ricochet/SoftParticle"), Color.white)); // soft streaks, no texture
+            var shatterRing = Mat("ShatterRing", Shader.Find("Ricochet/Ring"), Color.white);
+            shatterRing.SetFloat("_Width", 0.025f);
+            Set(fx, "_ringMaterial", shatterRing);
             Set(director, "_fx", fx);
             Set(director, "_popups", Fresh<ScorePopups>(game));
 
@@ -124,6 +128,22 @@ namespace Ricochet.EditorTools
             Set(drama, "_sfx", sfx);
             Set(drama, "_glow", glow);
             Set(drama, "_mood", mood);
+            Set(drama, "_lockRing", Quad("LockRing", GetOrCreate("DramaFx", game.transform),
+                Mat("DramaRing", Shader.Find("Ricochet/Ring"), Color.white), 0.3f));
+
+            // Focus (gaze): a four-dash reticle on the crystal you glance at while aiming.
+            var focus = Fresh<GazeFocus>(game);
+            var focusMat = Mat("FocusRing", Shader.Find("Ricochet/Ring"), Color.white);
+            focusMat.SetFloat("_Segments", 4f);
+            focusMat.SetFloat("_Gap", 0.45f);
+            focusMat.SetFloat("_Width", 0.03f);
+            Set(focus, "_marker", Quad("FocusRing", GetOrCreate("DramaFx", game.transform), focusMat, 0.34f));
+            Set(focus, "_playArea", playArea);
+            Set(focus, "_board", board);
+            Set(focus, "_sling", sling);
+            Set(focus, "_spark", spark);
+            Set(focus, "_sfx", sfx);
+            Set(director, "_focus", focus);
             var hud = Fresh<ScoreHud>(GetOrCreate("ScoreHud", game.transform));
             Set(hud, "_playArea", playArea);
             Set(hud, "_director", director);
@@ -285,6 +305,87 @@ namespace Ricochet.EditorTools
             return spark;
         }
 
+        /// <summary>The sling's band, posts, hover ring, grab-me ripple, launch flash and fingertip glows (SlingFx).</summary>
+        static void BuildSlingFx(GameObject slingGo, Sling sling, Spark spark, SfxPlayer sfx)
+        {
+            var root = GetOrCreate("SlingFx", slingGo.transform);
+            var ringMat = Mat("SlingRing", Shader.Find("Ricochet/Ring"), Color.white);
+            var haloMat = HaloMat("SlingGlow", new Color(0.35f, 0.85f, 1f), 1f);
+
+            var bandGo = GetOrCreate("Band", root.transform);
+            var band = GetOrAdd<LineRenderer>(bandGo);
+            var bandMat = Mat("SlingBand", Shader.Find("Ricochet/Ribbon"), Color.white);
+            bandMat.SetFloat("_Intensity", 1.2f);
+            bandMat.SetFloat("_Core", 0.8f);
+            band.sharedMaterial = bandMat;
+            band.textureMode = LineTextureMode.Stretch; // uv.y runs across the band: the Ribbon glow profile
+            band.alignment = LineAlignment.View;
+            band.numCornerVertices = 0;
+            band.numCapVertices = 0;
+            band.widthCurve = AnimationCurve.Constant(0f, 1f, 1f);
+            band.shadowCastingMode = ShadowCastingMode.Off;
+            band.receiveShadows = false;
+
+            var fx = Fresh<SlingFx>(root);
+            Set(fx, "_sling", sling);
+            Set(fx, "_spark", spark);
+            Set(fx, "_sfx", sfx);
+            Set(fx, "_band", band);
+            Set(fx, "_postLeft", Quad("PostLeft", root, haloMat, 0.045f));
+            Set(fx, "_postRight", Quad("PostRight", root, haloMat, 0.045f));
+            Set(fx, "_ring", Quad("Ring", root, ringMat, 0.13f));
+            Set(fx, "_ripple", Quad("Ripple", root, ringMat, 0.22f));
+            Set(fx, "_flash", Quad("Flash", root, haloMat, 0.22f));
+
+            // Zero-text onboarding: the ghost of light that demonstrates pinch-pull-release (GhostHandDemo).
+            var ghostGo = GetOrCreate("GhostHand", root.transform);
+            var ghostGlow = HaloMat("GhostGlow", new Color(0.7f, 0.95f, 1f), 1f);
+            var pathGo = GetOrCreate("Path", ghostGo.transform);
+            var path = GetOrAdd<LineRenderer>(pathGo);
+            path.sharedMaterial = Mat("GhostPath", Shader.Find("Ricochet/Ribbon"), Color.white);
+            path.textureMode = LineTextureMode.Stretch;
+            path.alignment = LineAlignment.View;
+            path.widthCurve = new AnimationCurve(new Keyframe(0f, 0.012f), new Keyframe(1f, 0.004f));
+            path.startColor = path.endColor = new Color(0.7f, 0.95f, 1f, 1f);
+            path.shadowCastingMode = ShadowCastingMode.Off;
+            path.receiveShadows = false;
+            var ghost = Fresh<GhostHandDemo>(ghostGo);
+            Set(ghost, "_sling", sling);
+            Set(ghost, "_head", Object.FindAnyObjectByType<OVRCameraRig>().centerEyeAnchor);
+            Set(ghost, "_thumb", Quad("Thumb", ghostGo, ghostGlow, 0.028f));
+            Set(ghost, "_index", Quad("Index", ghostGo, ghostGlow, 0.028f));
+            Set(ghost, "_ghostSpark", Quad("GhostSpark", ghostGo, ghostGlow, 0.05f));
+            Set(ghost, "_path", path);
+
+            var so = new SerializedObject(fx);
+            var tips = so.FindProperty("_tips");
+            tips.arraySize = 2;
+            tips.GetArrayElementAtIndex(0).objectReferenceValue = Quad("TipLeft", root, haloMat, 0.05f);
+            tips.GetArrayElementAtIndex(1).objectReferenceValue = Quad("TipRight", root, haloMat, 0.05f);
+            so.ApplyModifiedPropertiesWithoutUndo();
+        }
+
+        /// <summary>A collider-free billboard quad (Halo/Ring shaders face the camera in the vertex stage).</summary>
+        static MeshRenderer Quad(string name, GameObject parent, Material mat, float size)
+        {
+            var t = parent.transform.Find(name);
+            GameObject go;
+            if (t == null)
+            {
+                go = GameObject.CreatePrimitive(PrimitiveType.Quad);
+                go.name = name;
+                Object.DestroyImmediate(go.GetComponent<Collider>());
+                go.transform.SetParent(parent.transform, false);
+            }
+            else go = t.gameObject;
+            go.transform.localScale = Vector3.one * size;
+            var mr = go.GetComponent<MeshRenderer>();
+            mr.sharedMaterial = mat;
+            mr.shadowCastingMode = ShadowCastingMode.Off;
+            mr.receiveShadows = false;
+            return mr;
+        }
+
         static EncounterDirector BuildEncounter(GameObject game, PlayArea playArea, ShotDirector director,
             BoardGenerator board, Sling sling, SfxPlayer sfx, RoomGlow glow, TimeWarp warp, ShatterFx fx,
             ScorePopups popups, Mesh crystalMesh)
@@ -309,7 +410,13 @@ namespace Ricochet.EditorTools
             riftHaloRenderer.sharedMaterial = HaloMat("RiftHalo", new Color(1f, 0.3f, 0.8f), 0.7f);
             riftHaloRenderer.shadowCastingMode = ShadowCastingMode.Off;
             riftHalo.transform.localScale = Vector3.one * 0.9f;
+            // The wall fracturing around the crack: a flat wall-aligned quad (not a billboard), 1.8 x 2.4 m.
+            var web = Quad("Web", riftGo, Mat("RiftWeb", Shader.Find("Ricochet/RiftWeb"), Color.white), 1f);
+            web.transform.localScale = new Vector3(1.8f, 2.4f, 1f);
+            web.transform.localPosition = new Vector3(0f, 0f, -0.005f); // just behind the crack, still off the wall
+            web.transform.localRotation = Quaternion.Euler(0f, 180f, 0f); // the quad's front faces -z; the rift's +z is the room
             var rift = Fresh<Rift>(riftGo);
+            Set(rift, "_web", web);
             Set(rift, "_crack", crackRenderer);
             Set(rift, "_halo", riftHalo.transform);
             Set(rift, "_glow", glow);
@@ -320,9 +427,13 @@ namespace Ricochet.EditorTools
             Set(creature, "_bodyMesh", SaveMesh(EncounterMeshes.Creature(), MeshDir + "/Creature.asset"));
             Set(creature, "_shardMesh", crystalMesh);
             var creatureMat = Mat("Creature", Shader.Find("Ricochet/Creature"), Color.white);
+            // Rim only at the silhouette: the ink (and the void inside it) must dominate the face-on body.
+            creatureMat.SetFloat("_RimPower", 3.2f);
             Set(creature, "_bodyMaterial", creatureMat);
             Set(creature, "_eyeMaterial", HaloMat("CreatureEye", new Color(1f, 0.85f, 1f), 1.8f));
             Set(creature, "_barMaterial", Mat("Bar", unlit, Color.white));
+            Set(creature, "_tendrilMaterial", Mat("Tendril", Shader.Find("Ricochet/Tendril"), Color.white));
+            Set(creature, "_glyphMaterial", Mat("IntentGlyph", Shader.Find("Ricochet/IntentGlyph"), Color.white));
 
             var motes = Fresh<LightMotes>(GetOrCreate("Motes", game.transform));
             Set(motes, "_moteMaterial", HaloMat("MoteLight", new Color(1f, 0.8f, 0.35f), 2.4f));

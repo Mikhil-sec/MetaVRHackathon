@@ -28,6 +28,12 @@ namespace Ricochet.Input
 
         // Controllers have no fingertip to aim with, so they reach a little further than a pinch.
         public float ReachScale => 1.5f;
+        public bool IsHand => false;
+
+        public float PinchStrength => IsTracked
+            ? Mathf.Max(OVRInput.Get(OVRInput.Axis1D.PrimaryIndexTrigger, _controller),
+                        OVRInput.Get(OVRInput.Axis1D.PrimaryHandTrigger, _controller))
+            : 0f;
 
         public bool IsPinching
         {
