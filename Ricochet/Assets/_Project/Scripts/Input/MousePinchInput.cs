@@ -25,7 +25,7 @@ namespace Ricochet.Input
         }
 
         public bool IsTracked => Mouse.current != null;
-        public bool GrabsFromAnywhere => true;
+        public float ReachScale => float.PositiveInfinity;
 
         public bool IsPinching
         {

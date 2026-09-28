@@ -13,12 +13,13 @@ u set_autotick --enable true --interval_ms 16 >/dev/null
 u clear_console >/dev/null
 u editor_play >/dev/null
 sleep 8
-ev 'UnityEditor.EditorApplication.isPaused = false; return "frame=" + UnityEngine.Time.frameCount;'
+for w in $(seq 1 10); do ev "return \"alive\";" | grep -q alive && break; sleep 2; done
+ev 'UnityEngine.Application.runInBackground = true; UnityEditor.EditorApplication.isPaused = false; return "frame=" + UnityEngine.Time.frameCount;'
 
 for i in $(seq 1 "$SHOTS"); do
   # Wait until the sling is ready again, then fire at a random upward-forward angle.
   for w in $(seq 1 30); do
-    r=$(ev 'var s = UnityEngine.Object.FindAnyObjectByType<Ricochet.Gameplay.Sling>(); var cam = UnityEngine.Camera.main.transform; var dir = UnityEngine.Quaternion.Euler(UnityEngine.Random.Range(-25f,5f), UnityEngine.Random.Range(-35f,35f), 0) * cam.forward; return s.FireForTest(dir, UnityEngine.Random.Range(0.5f,1f)).ToString();')
+    r=$(ev 'UnityEditor.EditorApplication.isPaused = false; var s = UnityEngine.Object.FindAnyObjectByType<Ricochet.Gameplay.Sling>(); var cam = UnityEngine.Camera.main.transform; var dir = UnityEngine.Quaternion.Euler(UnityEngine.Random.Range(-25f,5f), UnityEngine.Random.Range(-35f,35f), 0) * cam.forward; return s.FireForTest(dir, UnityEngine.Random.Range(0.5f,1f)).ToString();')
     [ "$r" = "True" ] && break
     sleep 1
   done

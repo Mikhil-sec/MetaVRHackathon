@@ -76,8 +76,7 @@ namespace Ricochet.Gameplay
                 _wasPinching[i] = pinching;
                 if (!pinchStarted) continue;
 
-                bool inReach = input.GrabsFromAnywhere ||
-                               Vector3.Distance(input.PinchPoint, transform.position) <= _grabRadius;
+                bool inReach = Vector3.Distance(input.PinchPoint, transform.position) <= _grabRadius * input.ReachScale;
                 if (!inReach) continue;
 
                 _active = input;
@@ -105,7 +104,11 @@ namespace Ricochet.Gameplay
 
             _spark.Hold(transform.position - _smoothedPull);
             Vector3 velocity = LaunchVelocity();
-            if (_preview != null) _preview.Show(_spark.transform.position, velocity);
+            if (_preview != null)
+            {
+                if (_smoothedPull.magnitude >= _minPull) _preview.Show(_spark.transform.position, velocity);
+                else _preview.Hide();
+            }
 
             if (!_active.IsPinching)
             {
@@ -114,11 +117,12 @@ namespace Ricochet.Gameplay
             }
         }
 
-        Vector3 LaunchVelocity()
-        {
-            float t = Mathf.InverseLerp(_minPull, _maxPull, _smoothedPull.magnitude);
-            return _smoothedPull.normalized * Mathf.Lerp(_minSpeed, _maxSpeed, t);
-        }
+        Vector3 LaunchVelocity() =>
+            VelocityFor(_smoothedPull, Mathf.InverseLerp(_minPull, _maxPull, _smoothedPull.magnitude));
+
+        /// <summary>Launch velocity for an aim direction and a pull depth in [0, 1].</summary>
+        public Vector3 VelocityFor(Vector3 aimDirection, float pull01) =>
+            aimDirection.normalized * Mathf.Lerp(_minSpeed, _maxSpeed, Mathf.Clamp01(pull01));
 
         /// <summary>Automation hook (room sweep, Editor tests): fire from the anchor as if released at this aim/pull.</summary>
         public bool FireForTest(Vector3 aimDirection, float pull01)

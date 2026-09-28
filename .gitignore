@@ -6,3 +6,13 @@
 *.vrs
 .DS_Store
 Thumbs.db
+
+# Claude Code working files (local only, not part of the project)
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+.mcp.json
+Ricochet/.claude/
+docs/STATUS.md
+docs/SESSION_PROMPT.md
+tools/

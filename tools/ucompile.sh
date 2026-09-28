@@ -38,4 +38,10 @@ for i in $(seq 1 120); do
   unity command eval --code 'return "alive";' --format json 2>/dev/null | grep -q '"alive"' && break
   sleep 2
 done
+# The first "alive" can come from the old domain just before the reload starts; settle and check again.
+sleep 4
+for i in $(seq 1 60); do
+  unity command eval --code 'return UnityEditor.EditorApplication.isCompiling || UnityEditor.EditorApplication.isUpdating ? "busy" : "alive";' --format json 2>/dev/null | grep -q '"alive"' && break
+  sleep 2
+done
 echo "COMPILE $s"

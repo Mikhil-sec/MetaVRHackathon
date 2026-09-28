@@ -35,13 +35,12 @@ namespace Ricochet.EditorTools
 
             var unlit = Shader.Find("Universal Render Pipeline/Unlit");
             var particlesUnlit = Shader.Find("Universal Render Pipeline/Particles/Unlit");
-            var simpleLit = Shader.Find("Universal Render Pipeline/Simple Lit");
 
-            var crystalMat = Mat("Crystal", unlit, new Color(0.55f, 0.35f, 1f));
+            var crystalMat = Mat("Crystal", Shader.Find("Ricochet/CrystalGlass"), new Color(0.55f, 0.35f, 1f));
             var sparkMat = Mat("Spark", unlit, new Color(0.75f, 0.95f, 1f));
             var trailMat = AdditiveMat("SparkTrail", particlesUnlit, new Color(0.35f, 0.85f, 1f, 1f));
             var aimMat = AdditiveMat("AimLine", particlesUnlit, new Color(1f, 1f, 1f, 0.6f));
-            var roomPreviewMat = Mat("RoomPreview_Desktop", simpleLit, new Color(0.42f, 0.44f, 0.5f));
+            var roomGlowMat = Mat("RoomGlow", Shader.Find("Ricochet/RoomGlow"), Color.clear);
 
             var bouncy = AssetDatabase.LoadAssetAtPath<PhysicsMaterial>(Root + "/Art/SparkBounce.physicMaterial");
             if (bouncy == null)
@@ -73,12 +72,12 @@ namespace Ricochet.EditorTools
             Set(GetOrAdd<DesktopLook>(game), "_rigRoot", rig.transform);
             var sfx = GetOrAdd<SfxPlayer>(game);
 
-            var board = GetOrAdd<BoardGenerator>(GetOrCreate("Board", game.transform));
+            var board = Fresh<BoardGenerator>(GetOrCreate("Board", game.transform));
             Set(board, "_crystalPrefab", crystalPrefab.GetComponent<Crystal>());
 
             var spark = BuildSpark(game.transform, sparkMat, trailMat, bouncy);
             var slingGo = GetOrCreate("Sling", game.transform);
-            var sling = GetOrAdd<Sling>(slingGo);
+            var sling = Fresh<Sling>(slingGo);
             var previewGo = GetOrCreate("TrajectoryPreview", slingGo.transform);
             var line = GetOrAdd<LineRenderer>(previewGo);
             line.sharedMaterial = aimMat;
@@ -90,7 +89,7 @@ namespace Ricochet.EditorTools
             Set(sling, "_spark", spark);
             Set(sling, "_preview", preview);
 
-            var director = GetOrAdd<ShotDirector>(game);
+            var director = Fresh<ShotDirector>(game);
             Set(director, "_playArea", playArea);
             Set(director, "_sling", sling);
             Set(director, "_spark", spark);
@@ -98,14 +97,22 @@ namespace Ricochet.EditorTools
             Set(director, "_sfx", sfx);
             Set(director, "_leftHand", FindHand("ComprehensiveInteractorsLeft"));
             Set(director, "_rightHand", FindHand("ComprehensiveInteractorsRight"));
+            Set(director, "_trackingSpace", rig.transform.Find("TrackingSpace"));
+            var glow = Fresh<RoomGlow>(game);
+            Set(glow, "_spark", spark);
+            Set(director, "_glow", glow);
+            var fx = Fresh<ShatterFx>(game);
+            Set(fx, "_shardMaterial", AdditiveMat("Shard", particlesUnlit, new Color(1f, 0.9f, 0.6f, 1f)));
+            Set(director, "_fx", fx);
+            Set(director, "_popups", Fresh<ScorePopups>(game));
 
-            ConfigureMruk(log);
-            var effectMesh = Object.FindAnyObjectByType<EffectMesh>();
+            ConfigureMruk(log, roomGlowMat);
             var desktop = GetOrCreate("DesktopOnly");
             GetOrAdd<DesktopOnly>(desktop);
-            var preview3d = GetOrAdd<DesktopRoomPreview>(game);
-            Set(preview3d, "_effectMesh", effectMesh);
-            Set(preview3d, "_previewMaterial", roomPreviewMat);
+            Set(Fresh<DesktopRoomPreview>(game), "_playArea", playArea);
+            var mood = Fresh<PassthroughMood>(game);
+            Set(mood, "_playArea", playArea);
+            Set(mood, "_layer", Object.FindAnyObjectByType<OVRPassthroughLayer>());
             var lightGo = GetOrCreate("DesktopLight", desktop.transform);
             var light = GetOrAdd<Light>(lightGo);
             light.type = LightType.Directional;
@@ -140,15 +147,17 @@ namespace Ricochet.EditorTools
             log.AppendLine("Layers: Room=6 Spark=7 Crystal=8, collision matrix set");
         }
 
-        static void ConfigureMruk(System.Text.StringBuilder log)
+        static void ConfigureMruk(System.Text.StringBuilder log, Material roomGlow)
         {
             var mruk = Object.FindAnyObjectByType<MRUK>();
             mruk.SceneSettings.DataSource = MRUK.SceneDataSource.DeviceWithPrefabFallback;
             EditorUtility.SetDirty(mruk);
 
+            // The room mesh renders RoomGlow: invisible over passthrough except for our light, and depth for occlusion.
             var effectMesh = Object.FindAnyObjectByType<EffectMesh>();
             effectMesh.Colliders = true;
-            effectMesh.HideMesh = true;
+            effectMesh.HideMesh = false;
+            effectMesh.MeshMaterial = roomGlow;
             effectMesh.CastShadow = false;
             effectMesh.Layer = Layers.Room;
             effectMesh.Labels =
@@ -159,7 +168,7 @@ namespace Ricochet.EditorTools
                 MRUKAnchor.SceneLabels.PLANT | MRUKAnchor.SceneLabels.WALL_ART | MRUKAnchor.SceneLabels.OTHER |
                 MRUKAnchor.SceneLabels.DOOR_FRAME | MRUKAnchor.SceneLabels.WINDOW_FRAME;
             EditorUtility.SetDirty(effectMesh);
-            log.AppendLine("MRUK: DeviceWithPrefabFallback; EffectMesh: hidden colliders on layer Room");
+            log.AppendLine("MRUK: DeviceWithPrefabFallback; EffectMesh: RoomGlow mesh + colliders on layer Room");
         }
 
         /// <summary>Seated game: no locomotion, and no Building Block demo UI.</summary>
@@ -194,8 +203,9 @@ namespace Ricochet.EditorTools
             mr.receiveShadows = false;
             var col = go.AddComponent<SphereCollider>();
             col.center = new Vector3(0f, 0.3f, 0f);
-            col.radius = 0.55f;
-            go.transform.localScale = Vector3.one * 0.09f;
+            // Generous collider (~9 cm) around a ~6.5 cm crystal: forgiving hits, Peggle-style.
+            col.radius = 0.7f;
+            go.transform.localScale = Vector3.one * 0.13f;
             var crystal = go.AddComponent<Crystal>();
             Set(crystal, "_renderer", mr);
             var prefab = PrefabUtility.SaveAsPrefabAsset(go, path);
@@ -208,15 +218,34 @@ namespace Ricochet.EditorTools
             var existing = parent.Find("Spark");
             if (existing != null) Object.DestroyImmediate(existing.gameObject);
 
-            var go = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-            go.name = "Spark";
+            // Root: physics and logic at unit scale. Children: a stretchable visual and a billboard halo,
+            // so squash-and-stretch never touches the collider.
+            var go = new GameObject("Spark");
             go.transform.SetParent(parent, false);
-            go.transform.localScale = Vector3.one * 0.05f;
-            var mr = go.GetComponent<MeshRenderer>();
+            var col = go.AddComponent<SphereCollider>();
+            col.radius = 0.025f;
+            col.sharedMaterial = bouncy;
+            go.AddComponent<Rigidbody>();
+
+            var visual = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            visual.name = "Visual";
+            Object.DestroyImmediate(visual.GetComponent<Collider>());
+            visual.transform.SetParent(go.transform, false);
+            visual.transform.localScale = Vector3.one * 0.05f;
+            var mr = visual.GetComponent<MeshRenderer>();
             mr.sharedMaterial = mat;
             mr.shadowCastingMode = ShadowCastingMode.Off;
-            go.GetComponent<SphereCollider>().sharedMaterial = bouncy;
-            go.AddComponent<Rigidbody>();
+            mr.receiveShadows = false;
+
+            var halo = GameObject.CreatePrimitive(PrimitiveType.Quad);
+            halo.name = "Halo";
+            Object.DestroyImmediate(halo.GetComponent<Collider>());
+            halo.transform.SetParent(go.transform, false);
+            halo.transform.localScale = Vector3.one * 0.16f;
+            var hr = halo.GetComponent<MeshRenderer>();
+            hr.sharedMaterial = HaloMat("SparkHalo", new Color(0.35f, 0.85f, 1f), 1.1f);
+            hr.shadowCastingMode = ShadowCastingMode.Off;
+            hr.receiveShadows = false;
             var trail = go.AddComponent<TrailRenderer>();
             trail.sharedMaterial = trailMat;
             trail.time = 0.35f;
@@ -226,7 +255,17 @@ namespace Ricochet.EditorTools
             trail.emitting = false;
             var spark = go.AddComponent<Spark>();
             Set(spark, "_trail", trail);
+            Set(spark, "_visual", visual.transform);
+            Set(spark, "_halo", halo.transform);
             return spark;
+        }
+
+        static Material HaloMat(string name, Color color, float intensity)
+        {
+            var mat = Mat(name, Shader.Find("Ricochet/Halo"), color);
+            mat.SetColor("_Color", color);
+            mat.SetFloat("_Intensity", intensity);
+            return mat;
         }
 
         static Material Mat(string name, Shader shader, Color color)
@@ -284,6 +323,20 @@ namespace Ricochet.EditorTools
 
         static T GetOrAdd<T>(GameObject go) where T : Component =>
             go.TryGetComponent(out T c) ? c : go.AddComponent<T>();
+
+        /// <summary>
+        /// GetOrAdd, then reset every serialized field to the script's defaults. Tuning lives in code;
+        /// the scene only keeps the references this builder re-wires, so edited defaults always take effect.
+        /// </summary>
+        static T Fresh<T>(GameObject go) where T : MonoBehaviour
+        {
+            var component = GetOrAdd<T>(go);
+            var temp = new GameObject("FreshDefaults") { hideFlags = HideFlags.HideAndDontSave };
+            temp.SetActive(false);
+            EditorUtility.CopySerialized(temp.AddComponent<T>(), component);
+            Object.DestroyImmediate(temp);
+            return component;
+        }
 
         static void Set(Object target, string field, Object value)
         {

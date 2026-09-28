@@ -6,7 +6,8 @@
         "Oculus.VR",
         "meta.xr.mrutilitykit",
         "Unity.RenderPipelines.Universal.Runtime",
-        "Unity.InputSystem"
+        "Unity.InputSystem",
+        "Unity.TextMeshPro"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

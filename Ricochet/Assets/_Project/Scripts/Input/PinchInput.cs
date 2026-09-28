@@ -9,8 +9,8 @@ namespace Ricochet.Input
         bool IsTracked { get; }
         bool IsPinching { get; }
         Vector3 PinchPoint { get; }
-        /// <summary>True for sources that grab from anywhere (mouse), false for spatial sources that must reach the Spark.</summary>
-        bool GrabsFromAnywhere { get; }
+        /// <summary>Multiplier on the sling's grab radius. Infinity grabs from anywhere (mouse).</summary>
+        float ReachScale { get; }
     }
 
     /// <summary>Pinch from an ISDK hand. The pinch point is the midpoint of the thumb and index tips.</summary>
@@ -22,7 +22,7 @@ namespace Ricochet.Input
 
         public bool IsTracked => _hand != null && _hand.IsConnected && _hand.IsTrackedDataValid;
         public bool IsPinching => IsTracked && _hand.GetIndexFingerIsPinching();
-        public bool GrabsFromAnywhere => false;
+        public float ReachScale => 1f;
 
         public Vector3 PinchPoint
         {
