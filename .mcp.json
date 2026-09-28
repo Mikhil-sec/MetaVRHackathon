@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "metavr": {
+      "command": "C:/Users/naika/.metavr/bin/metavr.exe",
+      "args": ["mcp", "server", "--update"]
+    }
+  }
+}

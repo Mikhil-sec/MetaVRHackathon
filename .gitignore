@@ -1,0 +1,8 @@
+# Builds and captures (repo root)
+/Builds/
+*.apk
+*.aab
+*.obb
+*.vrs
+.DS_Store
+Thumbs.db

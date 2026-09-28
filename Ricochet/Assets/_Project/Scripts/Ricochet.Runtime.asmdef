@@ -1,0 +1,20 @@
+{
+    "name": "Ricochet.Runtime",
+    "rootNamespace": "Ricochet",
+    "references": [
+        "Oculus.Interaction",
+        "Oculus.VR",
+        "meta.xr.mrutilitykit",
+        "Unity.RenderPipelines.Universal.Runtime",
+        "Unity.InputSystem"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
