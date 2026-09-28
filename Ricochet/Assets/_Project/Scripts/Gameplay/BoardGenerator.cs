@@ -55,6 +55,8 @@ namespace Ricochet.Gameplay
         public IReadOnlyList<Crystal> Active => _active;
         /// <summary>The hero shot actually used (it steepens when the relaxed arc lands too close to the seat).</summary>
         public Vector3 HeroVelocity { get; private set; }
+        /// <summary>Where the relaxed straight shot lands (the hero cluster's center), if the board has one.</summary>
+        public Vector3? HeroPoint { get; private set; }
 
         /// <summary>Diagnostics for the room sweep: where the hero shot lands and how many crystals were placed there.</summary>
         public string HeroInfo { get; private set; } = "";
@@ -85,12 +87,14 @@ namespace Ricochet.Gameplay
 
             // Hero formation: centered where the relaxed straight shot first lands, so it always has a cluster to hit.
             HeroInfo = "none";
+            HeroPoint = null;
             if (TryHeroArc(hero, out Vector3 heroPos, out Vector3 heroNormal, out MRUKAnchor heroAnchor))
             {
+                HeroPoint = heroPos;
                 // The center crystal sits on the arc by construction, so it skips the line-of-sight test.
                 Vector3 center = heroPos + heroNormal * _surfaceOffset;
                 bool centerBlocked = _room.IsPositionInSceneVolume(center);
-                if (!centerBlocked) Spawn(center, heroNormal);
+                if (!centerBlocked && !Excluded(center)) Spawn(center, heroNormal);
                 PlaceFormation(heroPos, heroNormal, heroAnchor, _formationSize.y, false);
                 float pitch = Vector3.Angle(Vector3.ProjectOnPlane(HeroVelocity, Vector3.up), HeroVelocity);
                 HeroInfo = $"{heroAnchor.Label} d={(heroPos - seat.position).magnitude:F1} pitch={pitch:F0} n={_active.Count}{(centerBlocked ? " centerInVolume" : "")}";
@@ -295,8 +299,35 @@ namespace Ricochet.Gameplay
             return !_room.Raycast(new Ray(_eye, to / dist), dist - 0.12f, out _);
         }
 
+        /// <summary>Keep crystals out of a sphere (the rift and the creature in front of it). Radius 0 clears it.</summary>
+        public void SetExclusion(Vector3 center, float radius)
+        {
+            _exclusionCenter = center;
+            _exclusionRadius = radius;
+        }
+
+        Vector3 _exclusionCenter;
+        float _exclusionRadius;
+
+        /// <summary>Removes crystals inside the exclusion (call right after Generate, before they have appeared).</summary>
+        public int ClearExclusion()
+        {
+            int removed = 0;
+            for (int i = _active.Count - 1; i >= 0; i--)
+            {
+                if (!Excluded(_active[i].transform.position)) continue;
+                _active[i].gameObject.SetActive(false);
+                _active.RemoveAt(i);
+                removed++;
+            }
+            return removed;
+        }
+
+        bool Excluded(Vector3 p) => _exclusionRadius > 0f && (p - _exclusionCenter).sqrMagnitude < _exclusionRadius * _exclusionRadius;
+
         bool FarFromOthers(Vector3 p)
         {
+            if (Excluded(p)) return false;
             float min2 = _minSpacing * _minSpacing;
             foreach (var c in _active)
                 if ((c.transform.position - p).sqrMagnitude < min2) return false;

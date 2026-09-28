@@ -36,12 +36,14 @@ namespace Ricochet.Gameplay
         [SerializeField] Color _popGlow = new(2.2f, 1.7f, 0.75f);
         [SerializeField] Color _bounceGlow = new(0.6f, 1.7f, 2f);
         [SerializeField] Color _shardColor = new(1f, 0.85f, 0.45f);
+        [SerializeField] Color _corruptGlow = new(0.9f, 0.1f, 0.35f);
 
         [Header("Scoring")]
         [SerializeField] int _basePoints = 10;
         [SerializeField] float _popInterval = 0.07f;
 
         readonly List<Crystal> _litThisShot = new();
+        readonly List<int> _litValues = new();
         WaitForSeconds _popWait;
         Rigidbody _sparkBody;
         int _combo;
@@ -50,6 +52,26 @@ namespace Ricochet.Gameplay
         public int Score { get; private set; }
         public int LastShotScore { get; private set; }
         public int BestCombo { get; private set; }
+        /// <summary>Current chain length this shot (0 before the first hit).</summary>
+        public int Combo => _combo;
+        public bool ShotInProgress { get; private set; }
+
+        /// <summary>A crystal was lit for the first time: (crystal, combo index of this hit).</summary>
+        public event System.Action<Crystal, int> CrystalLit;
+        /// <summary>The shot's lit crystals have all popped: (crystals, points this shot).</summary>
+        public event System.Action<int, int> ShotScored;
+        public event System.Action BoardGenerated;
+        /// <summary>A lit crystal popped at shot end: (position, chain value = its hit index + 1).</summary>
+        public event System.Action<Vector3, int> CrystalPopped;
+
+        /// <summary>Optional: runs once the room is ready, before the first board and arming (the encounter intro).</summary>
+        public System.Func<IEnumerator> Intro;
+        /// <summary>Optional: runs after each shot is scored, before the sling re-arms (the encounter's turn).</summary>
+        public System.Func<IEnumerator> TurnGate;
+        /// <summary>Optional: adjusts a freshly generated board before it is announced; returns the crystal count.</summary>
+        public System.Func<int> BoardShaper;
+        /// <summary>Chain units of light banked this shot (each hit adds its chain value: 1, 2, 3...).</summary>
+        public int ShotLight => LastShotScore / Mathf.Max(1, _basePoints);
 
         void Awake()
         {
@@ -85,7 +107,17 @@ namespace Ricochet.Gameplay
             _sling.AddInput(new ControllerPinchInput(OVRInput.Controller.RTouch, _trackingSpace));
             if (PlayArea.IsDesktop) _sling.AddInput(new MousePinchInput(Camera.main, _sling.transform));
 
-            NewBoard();
+            if (Intro != null) StartCoroutine(IntroThenArm());
+            else
+            {
+                NewBoard();
+                _sling.Arm();
+            }
+        }
+
+        IEnumerator IntroThenArm()
+        {
+            yield return Intro(); // the intro owns board generation
             _sling.Arm();
         }
 
@@ -107,25 +139,55 @@ namespace Ricochet.Gameplay
 
         public Vector3 SlingPosition(Pose seat) => seat.position + seat.forward * _slingForward + Vector3.down * _slingDown;
 
+        /// <summary>Points from outside a shot (the Fever bonus).</summary>
+        public void AddScore(int points) => Score += points;
+
+        /// <summary>A new run: score and best chain back to zero.</summary>
+        public void ResetScore()
+        {
+            Score = 0;
+            BestCombo = 0;
+        }
+
+        /// <summary>A fresh board in the same room (it reveals as a cascade).</summary>
+        public void RegenerateBoard() => NewBoard();
+
         void NewBoard()
         {
             int count = _board.Generate(_playArea.Room, _playArea.Seat, _boardSeed++, HeroShot(_playArea.Seat));
+            if (BoardShaper != null) count = BoardShaper();
             Debug.Log($"[Ricochet] Board generated: {count} crystals in room '{_playArea.Room.name}'");
+            BoardGenerated?.Invoke();
         }
 
         void OnLaunched(Vector3 velocity)
         {
             _combo = 0;
             LastShotScore = 0;
+            ShotInProgress = true;
             _litThisShot.Clear();
+            _litValues.Clear();
             _sfx.PlayLaunch(_spark.transform.position);
         }
 
         void OnCrystalHit(Spark spark, Crystal crystal)
         {
             if (crystal.IsLit) return;
+            bool corrupt = crystal.IsCorrupt;
             crystal.Light();
             _litThisShot.Add(crystal);
+            if (corrupt)
+            {
+                // A hexed crystal: no light, and the chain snaps back to the start.
+                _litValues.Add(0);
+                _combo = 0;
+                _sfx.PlayBounce(crystal.transform.position, 1f);
+                if (_glow != null) _glow.Pulse(crystal.transform.position, _corruptGlow, 0.6f, 0.4f);
+                if (_spark.Ribbon != null) _spark.Ribbon.SetHeat(0f);
+                CrystalLit?.Invoke(crystal, -1);
+                return;
+            }
+            _litValues.Add(1 + _combo);
 
             int points = _basePoints * (1 + _combo);
             LastShotScore += points;
@@ -136,6 +198,8 @@ namespace Ricochet.Gameplay
             if (_glow != null) _glow.Pulse(crystal.transform.position, _hitGlow * (1f + 0.25f * Mathf.Min(_combo, 6)), 0.9f, 0.45f);
             _combo++;
             BestCombo = Mathf.Max(BestCombo, _combo);
+            if (_spark.Ribbon != null) _spark.Ribbon.SetHeat(_combo / 6f); // the trail heats toward gold with the chain
+            CrystalLit?.Invoke(crystal, _combo - 1);
         }
 
         void OnRoomBounced(Spark spark, Vector3 point, Vector3 normal)
@@ -156,11 +220,16 @@ namespace Ricochet.Gameplay
                 _litThisShot[i].Pop();
                 if (_glow != null) _glow.Pulse(at, _popGlow, 0.7f, 0.35f);
                 if (_fx != null) _fx.Burst(at, _shardColor);
+                CrystalPopped?.Invoke(at, _litValues[i]); // each hit carries its chain value in light (0 if hexed)
                 yield return _popWait;
             }
             Debug.Log($"[Ricochet] Shot: {_litThisShot.Count} crystals, +{LastShotScore}, total {Score}");
+            ShotInProgress = false;
+            ShotScored?.Invoke(_litThisShot.Count, LastShotScore);
 
-            if (_board.RemainingCount() == 0)
+            if (TurnGate != null)
+                yield return TurnGate(); // the encounter resolves the turn (damage, the creature's move, board refresh)
+            else if (_board.RemainingCount() == 0)
             {
                 Vector3 center = _playArea.Seat.position + _playArea.Seat.forward * 2f;
                 _sfx.PlayChord(center);

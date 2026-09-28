@@ -97,7 +97,7 @@ namespace Ricochet.Dev
             int roomCount = _roomLimit > 0 ? Mathf.Min(_roomLimit, prefabs.Length) : prefabs.Length;
             var report = new StringBuilder();
             var all = new Stats();
-            int straightMisses = 0, sparseBoards = 0;
+            int straightMisses = 0, sparseBoards = 0, floatingRifts = 0;
             float worstAimed = float.MaxValue;
             string worstRoom = "";
             var clock = Stopwatch.StartNew();
@@ -113,7 +113,15 @@ namespace Ricochet.Dev
                 MRUKRoom room = mruk.GetCurrentRoom();
                 int seed = StableSeed(prefabs[r].name); // per room, independent of list order, so failures reproduce
                 Pose seat = PlayArea.ChooseSeat(room, seed);
+                // Same order as the encounter: the board, then the rift clear of the hero cluster, then the rift's
+                // patch of wall is cleared of crystals.
+                _board.SetExclusion(Vector3.zero, 0f);
                 int crystals = _board.Generate(room, seat, seed, director.HeroShot(seat));
+                var rift = RiftPlacer.Place(room, seat, null, _board.HeroPoint);
+                if (!rift.OnWall) floatingRifts++;
+                _board.SetExclusion(rift.ExclusionCenter, rift.ExclusionRadius);
+                crystals -= _board.ClearExclusion();
+                _board.SetExclusion(Vector3.zero, 0f);
                 Vector3 slingPos = director.SlingPosition(seat);
                 var stats = new Stats();
                 _everHit.Clear();
@@ -137,7 +145,7 @@ namespace Ricochet.Dev
                 float aimed = stats.Mean(Kind.Aimed);
                 if (aimed < worstAimed) { worstAimed = aimed; worstRoom = prefabs[r].name; }
 
-                string line = $"{prefabs[r].name,-28} n={crystals,2} straight={straightHits}{straightInfo} hero=[{_board.HeroInfo}] " +
+                string line = $"{prefabs[r].name,-28} n={crystals,2} straight={straightHits}{straightInfo} hero=[{_board.HeroInfo}] rift=[{rift.Info}] " +
                               $"rand={stats.Mean(Kind.Random):F2} ({stats.Pct(stats.AtLeastOne, Kind.Random):F0}%>=1) " +
                               $"aimed={aimed:F2} ({stats.Pct(stats.AtLeastOne, Kind.Aimed):F0}%>=1, {stats.Pct(stats.AtLeastThree, Kind.Aimed):F0}%>=3) " +
                               $"reach={(crystals == 0 ? 0 : 100 * _everHit.Count / crystals)}% " +
@@ -150,7 +158,7 @@ namespace Ricochet.Dev
             string summary = $"ROOMS {roomCount} shots/room {_shotsPerRoom} floorEnds={_floorEndsShot} | " +
                              $"rand={all.Mean(Kind.Random):F2} ({all.Pct(all.AtLeastOne, Kind.Random):F0}%>=1) " +
                              $"aimed={all.Mean(Kind.Aimed):F2} ({all.Pct(all.AtLeastOne, Kind.Aimed):F0}%>=1, {all.Pct(all.AtLeastThree, Kind.Aimed):F0}%>=3) " +
-                             $"straightMiss={straightMisses} sparse(<24)={sparseBoards} " +
+                             $"straightMiss={straightMisses} sparse(<24)={sparseBoards} floatingRift={floatingRifts} " +
                              $"bounce={(float)all.Bounces / all.Total:F1} flight={all.Flight / all.Total:F1}s esc={100f * all.Escapes / all.Total:F1}% " +
                              $"end L/R/B/F={all.Ends[1]}/{all.Ends[2]}/{all.Ends[3]}/{all.Ends[4]} worst={worstRoom} ({worstAimed:F2})";
             report.AppendLine(summary);
@@ -211,7 +219,7 @@ namespace Ricochet.Dev
             Physics.SyncTransforms();
             _spark.Launch(_sling.VelocityFor(dir, pull));
 
-            float dt = Time.fixedDeltaTime;
+            float dt = Gameplay.TimeWarp.PhysicsStep;
             for (int step = 0; step < 2000 && _spark.InFlight; step++)
             {
                 _spark.Step(dt);

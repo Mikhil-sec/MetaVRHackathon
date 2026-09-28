@@ -31,10 +31,16 @@ namespace Ricochet.Gameplay
 
         readonly Vector4[] _sources = new Vector4[MaxGlows];
         readonly Vector4[] _colors = new Vector4[MaxGlows];
-        readonly Flash[] _flashes = new Flash[MaxGlows - 1];
+        // Slot 0: the Spark. Slots 1..6: flashes. Slot 7: one steady light (the rift on its wall).
+        readonly Flash[] _flashes = new Flash[MaxGlows - 2];
         float _sparkIntensity;
+        Vector4 _steadySource;
+        Color _steadyColor;
 
         public static RoomGlow Instance { get; private set; }
+
+        /// <summary>Multiplies the Spark's light on the room (the drama spotlight). 1 = normal.</summary>
+        public float SparkBoost { get; set; } = 1f;
 
         void Awake()
         {
@@ -64,16 +70,24 @@ namespace Ricochet.Gameplay
             _flashes[slot] = new Flash { Position = position, Color = color, Radius = radius, Duration = duration };
         }
 
+        /// <summary>A light that stays until changed (the owner animates it). Color black switches it off.</summary>
+        public void SetSteady(Vector3 position, Color color, float radius)
+        {
+            _steadySource = new Vector4(position.x, position.y, position.z, radius);
+            _steadyColor = color;
+        }
+
         void LateUpdate()
         {
             float dt = Time.deltaTime;
+            float realDt = Time.unscaledDeltaTime;
 
             // The Spark: a soft light that brightens in flight, with a slow breathing pulse while it waits.
             bool active = _spark != null && _spark.gameObject.activeInHierarchy;
             float target = !active ? 0f
-                : _spark.InFlight ? _sparkFlightIntensity
+                : _spark.InFlight ? _sparkFlightIntensity * SparkBoost
                 : _sparkIdleIntensity * (0.75f + 0.25f * Mathf.Sin(Time.time * 2.4f));
-            _sparkIntensity = Mathf.Lerp(_sparkIntensity, target, 1f - Mathf.Exp(-10f * dt));
+            _sparkIntensity = Mathf.Lerp(_sparkIntensity, target, 1f - Mathf.Exp(-10f * realDt));
             if (active)
             {
                 Vector3 p = _spark.transform.position;
@@ -94,6 +108,8 @@ namespace Ricochet.Gameplay
                 _sources[slot] = new Vector4(f.Position.x, f.Position.y, f.Position.z, f.Radius * (0.8f + 0.4f * t));
                 _colors[slot] = f.Color * intensity;
             }
+            _sources[MaxGlows - 1] = _steadySource;
+            _colors[MaxGlows - 1] = _steadyColor;
 
             Publish();
         }

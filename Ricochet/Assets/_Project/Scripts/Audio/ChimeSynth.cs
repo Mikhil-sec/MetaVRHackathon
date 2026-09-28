@@ -66,5 +66,89 @@ namespace Ricochet.Audio
             clip.SetData(data, 0);
             return clip;
         }
+
+        /// <summary>
+        /// One second of snare roll that loops seamlessly (a whole number of strokes per loop), with alternating
+        /// hand accents and slight timing humanization. The crescendo comes from the playback volume.
+        /// </summary>
+        public static AudioClip Drumroll(string name, int strokesPerSecond = 22)
+        {
+            int samples = SampleRate;
+            var data = new float[samples];
+            var rng = new System.Random(77);
+            int period = samples / strokesPerSecond;
+            for (int k = 0; k < strokesPerSecond; k++)
+            {
+                int start = k * period + rng.Next(-period / 8, period / 8 + 1);
+                float accent = (k % 2 == 0 ? 1f : 0.78f) * (0.9f + 0.2f * (float)rng.NextDouble());
+                float bp = 0f, lp = 0f;
+                for (int j = 0; j < period * 2; j++)
+                {
+                    float t = (float)j / SampleRate;
+                    float noise = (float)(rng.NextDouble() * 2.0 - 1.0);
+                    lp += 0.35f * (noise - lp);           // crude band-pass: low-passed noise minus its slower average
+                    bp += 0.05f * (lp - bp);
+                    float snare = (lp - bp) * Mathf.Exp(-38f * t);
+                    float skin = Mathf.Sin(2f * Mathf.PI * 190f * t) * Mathf.Exp(-60f * t) * 0.35f;
+                    int i = (start + j + samples) % samples; // wrap so the loop point is seamless
+                    data[i] += (snare + skin) * accent * 0.55f;
+                }
+            }
+            var clip = AudioClip.Create(name, samples, 1, SampleRate, false);
+            clip.SetData(data, 0);
+            return clip;
+        }
+
+        /// <summary>
+        /// A pitch glide from f0 to f1 (exponential), a few harmonics plus filtered noise, with a soft attack and an
+        /// exponential tail. One recipe covers rumbles, squeals, whooshes and booms.
+        /// </summary>
+        public static AudioClip Sweep(string name, float f0, float f1, float seconds, float noise, float decay, int seed = 7)
+        {
+            int samples = Mathf.CeilToInt(seconds * SampleRate);
+            var data = new float[samples];
+            var rng = new System.Random(seed);
+            float phase = 0f, lp = 0f;
+            for (int i = 0; i < samples; i++)
+            {
+                float t = (float)i / SampleRate;
+                float k = t / seconds;
+                float f = f0 * Mathf.Pow(f1 / f0, k);
+                phase += 2f * Mathf.PI * f / SampleRate;
+                float tone = Mathf.Sin(phase) + 0.35f * Mathf.Sin(2f * phase) + 0.15f * Mathf.Sin(3f * phase + 1f);
+                float n = (float)(rng.NextDouble() * 2.0 - 1.0);
+                lp += Mathf.Clamp01(f * 4f / SampleRate) * (n - lp);   // noise band follows the pitch
+                float env = Mathf.Clamp01(t / 0.01f) * Mathf.Exp(-decay * t) * Mathf.Clamp01((seconds - t) / 0.05f);
+                data[i] = (tone * (1f - noise) + lp * 2.5f * noise) * env * 0.4f;
+            }
+            var clip = AudioClip.Create(name, samples, 1, SampleRate, false);
+            clip.SetData(data, 0);
+            return clip;
+        }
+
+        /// <summary>A bright, long crash: high-passed noise plus a shimmer of inharmonic partials.</summary>
+        public static AudioClip Crash(string name, float seconds = 2.2f)
+        {
+            int samples = Mathf.CeilToInt(seconds * SampleRate);
+            var data = new float[samples];
+            var rng = new System.Random(4321);
+            float lp = 0f;
+            float[] partial = { 3150f, 4420f, 5870f, 7330f };
+            for (int i = 0; i < samples; i++)
+            {
+                float t = (float)i / SampleRate;
+                float noise = (float)(rng.NextDouble() * 2.0 - 1.0);
+                lp += 0.25f * (noise - lp);
+                float hiss = (noise - lp) * Mathf.Exp(-2.2f * t);
+                float shimmer = 0f;
+                for (int p = 0; p < partial.Length; p++)
+                    shimmer += Mathf.Sin(2f * Mathf.PI * partial[p] * t + p) * Mathf.Exp(-(3f + p) * t);
+                float attack = Mathf.Clamp01(t / 0.002f);
+                data[i] = (hiss * 0.5f + shimmer * 0.06f) * attack * 0.7f;
+            }
+            var clip = AudioClip.Create(name, samples, 1, SampleRate, false);
+            clip.SetData(data, 0);
+            return clip;
+        }
     }
 }

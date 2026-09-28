@@ -53,7 +53,10 @@ namespace Ricochet.Gameplay
             }
         }
 
-        public void Show(Vector3 position, int points, int combo)
+        [SerializeField] Color _damageColor = new(1f, 0.35f, 0.6f);
+
+        /// <summary>"+points" escalating with the combo, or "-amount" in the damage color.</summary>
+        public void Show(Vector3 position, int points, int combo, bool damage = false)
         {
             if (_camera == null && Camera.main != null) _camera = Camera.main.transform;
             if (_camera == null) return;
@@ -68,8 +71,9 @@ namespace Ricochet.Gameplay
             p.Active = true;
             float comboScale = 1f + 0.08f * Mathf.Min(combo, 8);
             p.Size = _sizePerMeter * Vector3.Distance(_camera.position, position) * comboScale;
-            p.Color = Color.Lerp(_lowColor, _highColor, Mathf.Clamp01(combo / (float)_comboForHighColor));
-            p.Text.SetText("+{0}", points);
+            p.Color = damage ? _damageColor : Color.Lerp(_lowColor, _highColor, Mathf.Clamp01(combo / (float)_comboForHighColor));
+            if (damage) p.Text.SetText("-{0}", points);
+            else p.Text.SetText("+{0}", points);
             p.Text.gameObject.SetActive(true);
         }
 

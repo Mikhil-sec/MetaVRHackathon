@@ -38,7 +38,7 @@ namespace Ricochet.EditorTools
 
             var crystalMat = Mat("Crystal", Shader.Find("Ricochet/CrystalGlass"), new Color(0.55f, 0.35f, 1f));
             var sparkMat = Mat("Spark", unlit, new Color(0.75f, 0.95f, 1f));
-            var trailMat = AdditiveMat("SparkTrail", particlesUnlit, new Color(0.35f, 0.85f, 1f, 1f));
+            var trailMat = Mat("SparkRibbon", Shader.Find("Ricochet/Ribbon"), Color.white);
             var aimMat = AdditiveMat("AimLine", particlesUnlit, new Color(1f, 1f, 1f, 0.6f));
             var roomGlowMat = Mat("RoomGlow", Shader.Find("Ricochet/RoomGlow"), Color.clear);
 
@@ -113,6 +113,28 @@ namespace Ricochet.EditorTools
             var mood = Fresh<PassthroughMood>(game);
             Set(mood, "_playArea", playArea);
             Set(mood, "_layer", Object.FindAnyObjectByType<OVRPassthroughLayer>());
+
+            // Juice: last-crystal slow motion and the score readout.
+            var warp = Fresh<TimeWarp>(game);
+            var drama = Fresh<ShotDrama>(game);
+            Set(drama, "_spark", spark);
+            Set(drama, "_board", board);
+            Set(drama, "_director", director);
+            Set(drama, "_warp", warp);
+            Set(drama, "_sfx", sfx);
+            Set(drama, "_glow", glow);
+            Set(drama, "_mood", mood);
+            var hud = Fresh<ScoreHud>(GetOrCreate("ScoreHud", game.transform));
+            Set(hud, "_playArea", playArea);
+            Set(hud, "_director", director);
+            Set(hud, "_board", board);
+
+            // Encounter: rift, creature, light motes, and the turn director (CONCEPT section 3).
+            var encounter = BuildEncounter(game, playArea, director, board, sling, sfx, glow, warp, fx,
+                game.GetComponent<ScorePopups>(), crystalMesh);
+            Set(drama, "_encounter", encounter);
+            Set(hud, "_encounter", encounter);
+            log.AppendLine("Encounter: rift, creature, motes, director");
             var lightGo = GetOrCreate("DesktopLight", desktop.transform);
             var light = GetOrAdd<Light>(lightGo);
             light.type = LightType.Directional;
@@ -246,18 +268,80 @@ namespace Ricochet.EditorTools
             hr.sharedMaterial = HaloMat("SparkHalo", new Color(0.35f, 0.85f, 1f), 1.1f);
             hr.shadowCastingMode = ShadowCastingMode.Off;
             hr.receiveShadows = false;
-            var trail = go.AddComponent<TrailRenderer>();
-            trail.sharedMaterial = trailMat;
-            trail.time = 0.35f;
-            trail.widthCurve = new AnimationCurve(new Keyframe(0f, 0.035f), new Keyframe(1f, 0f));
-            trail.minVertexDistance = 0.02f;
-            trail.shadowCastingMode = ShadowCastingMode.Off;
-            trail.emitting = false;
+            // The light trail: our own ribbon mesh on a world-origin sibling (TECH_GUIDE section 4).
+            var ribbonGo = GetOrCreate("SparkRibbon", parent);
+            ribbonGo.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
+            GetOrAdd<MeshFilter>(ribbonGo);
+            var ribbonRenderer = GetOrAdd<MeshRenderer>(ribbonGo);
+            ribbonRenderer.sharedMaterial = trailMat;
+            ribbonRenderer.shadowCastingMode = ShadowCastingMode.Off;
+            ribbonRenderer.receiveShadows = false;
+            var ribbon = Fresh<SparkRibbon>(ribbonGo);
+            Set(ribbon, "_target", go.transform);
             var spark = go.AddComponent<Spark>();
-            Set(spark, "_trail", trail);
+            Set(spark, "_ribbon", ribbon);
             Set(spark, "_visual", visual.transform);
             Set(spark, "_halo", halo.transform);
             return spark;
+        }
+
+        static EncounterDirector BuildEncounter(GameObject game, PlayArea playArea, ShotDirector director,
+            BoardGenerator board, Sling sling, SfxPlayer sfx, RoomGlow glow, TimeWarp warp, ShatterFx fx,
+            ScorePopups popups, Mesh crystalMesh)
+        {
+            var unlit = Shader.Find("Universal Render Pipeline/Unlit");
+
+            var riftGo = GetOrCreate("Rift", game.transform);
+            var crackGo = GetOrCreate("Crack", riftGo.transform);
+            GetOrAdd<MeshFilter>(crackGo).sharedMesh = SaveMesh(EncounterMeshes.Rift(), MeshDir + "/Rift.asset");
+            var crackRenderer = GetOrAdd<MeshRenderer>(crackGo);
+            crackRenderer.sharedMaterial = Mat("Rift", Shader.Find("Ricochet/Rift"), Color.white);
+            crackRenderer.shadowCastingMode = ShadowCastingMode.Off;
+            crackRenderer.receiveShadows = false;
+            var riftHalo = GetOrCreate("Halo", riftGo.transform);
+            if (riftHalo.GetComponent<MeshFilter>() == null)
+            {
+                var quad = GameObject.CreatePrimitive(PrimitiveType.Quad);
+                GetOrAdd<MeshFilter>(riftHalo).sharedMesh = quad.GetComponent<MeshFilter>().sharedMesh;
+                Object.DestroyImmediate(quad);
+            }
+            var riftHaloRenderer = GetOrAdd<MeshRenderer>(riftHalo);
+            riftHaloRenderer.sharedMaterial = HaloMat("RiftHalo", new Color(1f, 0.3f, 0.8f), 0.7f);
+            riftHaloRenderer.shadowCastingMode = ShadowCastingMode.Off;
+            riftHalo.transform.localScale = Vector3.one * 0.9f;
+            var rift = Fresh<Rift>(riftGo);
+            Set(rift, "_crack", crackRenderer);
+            Set(rift, "_halo", riftHalo.transform);
+            Set(rift, "_glow", glow);
+
+            var creatureGo = GetOrCreate("Creature", game.transform);
+            creatureGo.SetActive(true);
+            var creature = Fresh<Creature>(creatureGo);
+            Set(creature, "_bodyMesh", SaveMesh(EncounterMeshes.Creature(), MeshDir + "/Creature.asset"));
+            Set(creature, "_shardMesh", crystalMesh);
+            var creatureMat = Mat("Creature", Shader.Find("Ricochet/Creature"), Color.white);
+            Set(creature, "_bodyMaterial", creatureMat);
+            Set(creature, "_eyeMaterial", HaloMat("CreatureEye", new Color(1f, 0.85f, 1f), 1.8f));
+            Set(creature, "_barMaterial", Mat("Bar", unlit, Color.white));
+
+            var motes = Fresh<LightMotes>(GetOrCreate("Motes", game.transform));
+            Set(motes, "_moteMaterial", HaloMat("MoteLight", new Color(1f, 0.8f, 0.35f), 2.4f));
+            Set(motes, "_boltMaterial", HaloMat("MoteBolt", new Color(1f, 0.2f, 0.55f), 1.8f));
+
+            var encounter = Fresh<EncounterDirector>(game);
+            Set(encounter, "_playArea", playArea);
+            Set(encounter, "_director", director);
+            Set(encounter, "_board", board);
+            Set(encounter, "_sling", sling);
+            Set(encounter, "_rift", rift);
+            Set(encounter, "_creature", creature);
+            Set(encounter, "_motes", motes);
+            Set(encounter, "_sfx", sfx);
+            Set(encounter, "_glow", glow);
+            Set(encounter, "_warp", warp);
+            Set(encounter, "_fx", fx);
+            Set(encounter, "_popups", popups);
+            return encounter;
         }
 
         static Material HaloMat(string name, Color color, float intensity)
@@ -303,9 +387,17 @@ namespace Ricochet.EditorTools
         static Mesh SaveMesh(Mesh mesh, string path)
         {
             var existing = AssetDatabase.LoadAssetAtPath<Mesh>(path);
-            if (existing != null) return existing;
+            string name = System.IO.Path.GetFileNameWithoutExtension(path);
+            if (existing != null)
+            {
+                // Refresh in place so procedural mesh changes land without breaking references.
+                EditorUtility.CopySerialized(mesh, existing);
+                existing.name = name;
+                EditorUtility.SetDirty(existing);
+                return existing;
+            }
             var copy = Object.Instantiate(mesh);
-            copy.name = "Crystal";
+            copy.name = name;
             AssetDatabase.CreateAsset(copy, path);
             return copy;
         }

@@ -20,17 +20,23 @@ namespace Ricochet.Gameplay
         [SerializeField] float _restTime = 0.5f;
         [Tooltip("CONCEPT section 3: the shot ends when the Spark touches the floor.")]
         [SerializeField] bool _floorEndsShot = true;
-        [SerializeField] TrailRenderer _trail;
+        [SerializeField] SparkRibbon _ribbon;
 
         [Header("Visual (children; the root keeps the collider)")]
         [SerializeField] Transform _visual;
         [SerializeField] Transform _halo;
         [SerializeField] float _stretchPerSpeed = 0.07f;
         [SerializeField] float _maxStretch = 1.7f;
+        [Tooltip("Bounce squash: flatten against the contact normal, then spring back (seconds of game time).")]
+        [SerializeField] float _squashTime = 0.1f;
+        [SerializeField] float _maxSquash = 0.5f;
 
         Rigidbody _body;
         Vector3 _visualScale, _haloScale;
         float _stretch = 1f;
+        float _squash;          // 1 at impact, decays to 0
+        float _squashStrength;
+        Vector3 _squashNormal;
         float _flightTime;
         float _slowTime;
         int _roomBounces;
@@ -41,6 +47,7 @@ namespace Ricochet.Gameplay
         public float FlightTime => _flightTime;
         public float GravityAcceleration => Physics.gravity.magnitude * _gravityScale;
         public bool FloorEndsShot { get => _floorEndsShot; set => _floorEndsShot = value; }
+        public SparkRibbon Ribbon => _ribbon;
 
         public event Action<Spark, Crystal> CrystalHit;
         public event Action<Spark, Vector3, Vector3> RoomBounced;
@@ -59,23 +66,49 @@ namespace Ricochet.Gameplay
             if (_halo != null) _haloScale = _halo.localScale;
         }
 
-        /// <summary>Squash-and-stretch along the velocity (TECH_GUIDE section 4); a slow breathing halo while held.</summary>
+        /// <summary>
+        /// Squash-and-stretch (TECH_GUIDE section 4): stretch along the velocity in flight, flatten against the surface
+        /// on each impact, and a slow breathing halo while held. Visual children only; the collider never changes.
+        /// </summary>
         void LateUpdate()
         {
             if (_visual == null) return;
+            float dt = Time.deltaTime;
             Vector3 v = InFlight ? _body.linearVelocity : Vector3.zero;
             float speed = v.magnitude;
             float target = Mathf.Min(1f + speed * _stretchPerSpeed, _maxStretch);
-            _stretch = Mathf.Lerp(_stretch, target, 1f - Mathf.Exp(-25f * Time.deltaTime));
-            if (speed > 0.2f) _visual.rotation = Quaternion.LookRotation(v);
-            float side = 1f / Mathf.Sqrt(_stretch); // preserve volume
-            _visual.localScale = Vector3.Scale(_visualScale, new Vector3(side, side, _stretch));
+            _stretch = Mathf.Lerp(_stretch, target, 1f - Mathf.Exp(-25f * dt));
+
+            float axis; // scale along the visual's z
+            if (_squash > 0f)
+            {
+                _squash = Mathf.Max(0f, _squash - dt / _squashTime);
+                _visual.rotation = Quaternion.LookRotation(_squashNormal);
+                axis = 1f - _maxSquash * _squashStrength * _squash * _squash;
+            }
+            else
+            {
+                if (speed > 0.2f) _visual.rotation = Quaternion.LookRotation(v);
+                axis = _stretch;
+            }
+            float side = 1f / Mathf.Sqrt(axis); // preserve volume
+            _visual.localScale = Vector3.Scale(_visualScale, new Vector3(side, side, axis));
 
             if (_halo != null)
             {
-                float pulse = InFlight ? 1.2f : 1f + 0.1f * Mathf.Sin(Time.time * 2.4f);
+                float pulse = InFlight ? 1.2f + 0.6f * _squashStrength * _squash : 1f + 0.1f * Mathf.Sin(Time.time * 2.4f);
                 _halo.localScale = _haloScale * pulse;
             }
+        }
+
+        void Squash(Collision collision, ContactPoint contact)
+        {
+            float impact = Mathf.Abs(Vector3.Dot(collision.relativeVelocity, contact.normal));
+            _squashStrength = Mathf.Clamp01(impact / 5f);
+            if (_squashStrength < 0.1f) return;
+            _squash = 1f;
+            _squashNormal = contact.normal;
+            _stretch = 1f; // spring back from round, not from the pre-impact stretch
         }
 
         /// <summary>Kinematic placement while held in the sling.</summary>
@@ -84,18 +117,19 @@ namespace Ricochet.Gameplay
             InFlight = false;
             _body.isKinematic = true;
             transform.position = position;
-            if (_trail != null) _trail.emitting = false;
+            if (_ribbon != null) _ribbon.Emitting = false;
         }
 
         public void Launch(Vector3 velocity)
         {
             _flightTime = 0f;
             _slowTime = 0f;
+            _squash = 0f;
             _roomBounces = 0;
             _body.isKinematic = false;
             _body.linearVelocity = velocity;
             _body.angularVelocity = Vector3.zero;
-            if (_trail != null) { _trail.Clear(); _trail.emitting = true; }
+            if (_ribbon != null) { _ribbon.Clear(); _ribbon.Emitting = true; }
             LastEnd = EndReason.None;
             InFlight = true;
         }
@@ -136,7 +170,7 @@ namespace Ricochet.Gameplay
             Hold(origin);
             Physics.SyncTransforms();
             Launch(velocity);
-            float dt = Time.fixedDeltaTime;
+            float dt = TimeWarp.PhysicsStep;
             for (float t = 0f; t < maxTime && _predictedCollider == null; t += dt)
             {
                 _body.AddForce(Physics.gravity * _gravityScale, ForceMode.Acceleration);
@@ -171,13 +205,14 @@ namespace Ricochet.Gameplay
                 }
                 return;
             }
+            var contact = collision.GetContact(0);
+            Squash(collision, contact);
             if (collision.collider.TryGetComponent(out Crystal crystal))
             {
                 CrystalHit?.Invoke(this, crystal);
                 return;
             }
             _roomBounces++;
-            var contact = collision.GetContact(0);
             RoomBounced?.Invoke(this, contact.point, contact.normal);
             if (_floorEndsShot && IsFloor(collision.collider)) Die(EndReason.Floor);
         }
@@ -194,7 +229,7 @@ namespace Ricochet.Gameplay
             LastEnd = reason;
             InFlight = false;
             _body.isKinematic = true;
-            if (_trail != null) _trail.emitting = false;
+            if (_ribbon != null) _ribbon.Emitting = false;
             Died?.Invoke(this);
         }
     }

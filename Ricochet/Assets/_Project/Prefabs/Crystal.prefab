@@ -128,3 +128,4 @@ MonoBehaviour:
   _renderer: {fileID: 5669510057661775428}
   _idleColor: {r: 0.55, g: 0.35, b: 1, a: 1}
   _litColor: {r: 1, g: 0.8, b: 0.35, a: 1}
+  _corruptColor: {r: 0.55, g: 0.04, b: 0.16, a: 1}
