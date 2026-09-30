@@ -35,6 +35,21 @@ namespace Ricochet.Gameplay
         [SerializeField] Color _shieldColor = new(0.45f, 0.85f, 1f);
         [SerializeField] Color _hurtColor = new(1f, 0.3f, 0.25f);
 
+        [Header("Run progress (a row of pips under the shield: five creatures, then the crown)")]
+        [SerializeField] Material _glyphMaterial;
+        [SerializeField] float _pipSize = 0.012f;
+        [SerializeField] float _pipSpacing = 0.018f;
+        [SerializeField] Color _pipDone = new(1f, 0.8f, 0.4f);
+        [SerializeField] Color _pipAhead = new(0.6f, 0.5f, 0.85f);
+        [SerializeField] Color _pipNow = new(1f, 0.45f, 0.85f);
+
+        static readonly int KindId = Shader.PropertyToID("_Kind");
+        static readonly int ColorId = Shader.PropertyToID("_Color");
+        static readonly int IntensityId = Shader.PropertyToID("_Intensity");
+        readonly MeshRenderer[] _pips = new MeshRenderer[RunState.EncountersPerRun];
+        MaterialPropertyBlock _block;
+        int _pipNowIndex = -1;
+
         TextMeshPro _score, _line, _shield, _shieldLabel;
         float _shown, _rollSpeed;
         int _shownInt = -1;
@@ -54,6 +69,54 @@ namespace Ricochet.Gameplay
             _line.gameObject.SetActive(false);
             _shield.gameObject.SetActive(false);
             _shieldLabel.gameObject.SetActive(false);
+            if (_glyphMaterial != null) BuildPips();
+        }
+
+        void BuildPips()
+        {
+            _block = new MaterialPropertyBlock();
+            var root = new GameObject("RunPips").transform;
+            root.SetParent(transform, false);
+            root.localPosition = new Vector3(_left * 2f, -0.074f, 0f);
+            for (int i = 0; i < _pips.Length; i++)
+            {
+                var go = new GameObject("Pip" + i);
+                go.transform.SetParent(root, false);
+                bool boss = i == _pips.Length - 1;
+                float size = _pipSize * (boss ? 1.6f : 1f);
+                go.transform.localPosition = new Vector3(_pipSpacing * i + size * 0.5f + (boss ? _pipSize * 0.3f : 0f), 0f, 0f);
+                go.transform.localScale = Vector3.one * size;
+                go.AddComponent<MeshFilter>().sharedMesh = RewardPicker.Quad();
+                var r = go.AddComponent<MeshRenderer>();
+                r.sharedMaterial = _glyphMaterial;
+                r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                r.receiveShadows = false;
+                _pips[i] = r;
+            }
+            root.gameObject.SetActive(false);
+        }
+
+        void RefreshPips()
+        {
+            if (_block == null || _encounter == null || _encounter.Run == null) return;
+            int now = _encounter.Encounter;
+            _pipNowIndex = now;
+            for (int i = 0; i < _pips.Length; i++)
+            {
+                bool boss = i == _pips.Length - 1;
+                float kind = boss ? Upgrades.GlyphCrown : i < now ? Upgrades.GlyphPip + 1f : Upgrades.GlyphPip;
+                Color c = i < now ? _pipDone : i == now ? _pipNow : _pipAhead;
+                SetPip(i, kind, c, i < now ? 1.4f : i == now ? 1.6f : 0.7f);
+            }
+        }
+
+        void SetPip(int i, float kind, Color color, float intensity)
+        {
+            _block.Clear();
+            _block.SetFloat(KindId, kind);
+            _block.SetColor(ColorId, color);
+            _block.SetFloat(IntensityId, intensity);
+            _pips[i].SetPropertyBlock(_block);
         }
 
         void OnEnable()
@@ -62,7 +125,11 @@ namespace Ricochet.Gameplay
             _director.CrystalLit += OnCrystalLit;
             _director.ShotScored += OnShotScored;
             _director.BoardGenerated += ShowRemaining;
-            if (_encounter != null) _encounter.ShieldChanged += OnShieldChanged;
+            if (_encounter != null)
+            {
+                _encounter.ShieldChanged += OnShieldChanged;
+                _encounter.RunChanged += RefreshPips;
+            }
         }
 
         void OnDisable()
@@ -71,7 +138,11 @@ namespace Ricochet.Gameplay
             _director.CrystalLit -= OnCrystalLit;
             _director.ShotScored -= OnShotScored;
             _director.BoardGenerated -= ShowRemaining;
-            if (_encounter != null) _encounter.ShieldChanged -= OnShieldChanged;
+            if (_encounter != null)
+            {
+                _encounter.ShieldChanged -= OnShieldChanged;
+                _encounter.RunChanged -= RefreshPips;
+            }
         }
 
         void OnShieldChanged(int value, int delta)
@@ -117,6 +188,11 @@ namespace Ricochet.Gameplay
                 _shieldLabel.gameObject.SetActive(true);
                 _shield.SetText("{0}", _encounter.Shield);
                 _shieldFlash = _shieldColor;
+                if (_block != null)
+                {
+                    _pips[0].transform.parent.gameObject.SetActive(true);
+                    RefreshPips();
+                }
             }
             ShowRemaining();
         }
@@ -185,6 +261,14 @@ namespace Ricochet.Gameplay
                 Color lc = _shieldColor * 0.8f;
                 lc.a = _dim;
                 _shieldLabel.color = lc;
+                // The current encounter's pip breathes.
+                int now = _pipNowIndex;
+                if (_block != null && now >= 0 && now < _pips.Length)
+                {
+                    bool boss = now == _pips.Length - 1;
+                    SetPip(now, boss ? Upgrades.GlyphCrown : Upgrades.GlyphPip, _pipNow,
+                           (1.3f + 0.5f * Mathf.Sin(Time.unscaledTime * 3f)) * _dim);
+                }
             }
         }
 

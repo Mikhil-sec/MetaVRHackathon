@@ -53,6 +53,8 @@ namespace Ricochet.Gameplay
         float _cosCone;
 
         public IReadOnlyList<Crystal> Active => _active;
+        /// <summary>Extra Gold crystals on every board (the Gold Rush relic). Scoring only: physics is unchanged.</summary>
+        public int ExtraGold { get; set; }
         /// <summary>The hero shot actually used (it steepens when the relaxed arc lands too close to the seat).</summary>
         public Vector3 HeroVelocity { get; private set; }
         /// <summary>Where the relaxed straight shot lands (the hero cluster's center), if the board has one.</summary>
@@ -127,7 +129,7 @@ namespace Ricochet.Gameplay
         {
             int n = _active.Count;
             if (n < 12) return;
-            int gold = 3, amp = 2, bomb = 2, prism = 1;
+            int gold = 3 + Mathf.Clamp(ExtraGold, 0, n - 8), amp = 2, bomb = 2, prism = 1;
             // Fisher-Yates over indices with the board's own RNG: the same seed gives the same board.
             var order = new int[n];
             for (int i = 0; i < n; i++) order[i] = i;

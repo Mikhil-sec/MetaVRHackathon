@@ -76,6 +76,55 @@ namespace Ricochet.Dev
 
         public static string TimeLogSummary() => s_timeLog != null ? s_timeLog.Summary() : "not recording";
 
+        /// <summary>Run: take a Spark type or relic by name ("Splitter", "Heavy", "Carom", "SecondWind"...) or "Mend".</summary>
+        public static string Grant(string name)
+        {
+            var encounter = Object.FindAnyObjectByType<EncounterDirector>();
+            if (encounter == null) return "no encounter";
+            Reward reward;
+            if (System.Enum.TryParse(name, true, out SparkKind spark) && spark != SparkKind.Plain) reward = new Reward(spark);
+            else if (System.Enum.TryParse(name, true, out Relic relic) && relic != Relic.None) reward = new Reward(relic);
+            else if (name.Equals("Mend", System.StringComparison.OrdinalIgnoreCase)) reward = Reward.Mend;
+            else return "unknown reward " + name;
+            encounter.Grant(reward);
+            return "granted " + reward.Name + "; " + encounter.Run;
+        }
+
+        /// <summary>Run: the reward picker takes this orb by itself after a beat (-1: wait for a real pinch).</summary>
+        public static string AutoPick(int index)
+        {
+            RewardPicker.AutoPick = index;
+            return "autopick " + index;
+        }
+
+        public static string RunInfo()
+        {
+            var encounter = Object.FindAnyObjectByType<EncounterDirector>();
+            return encounter != null ? encounter.Run.ToString() : "no encounter";
+        }
+
+        /// <summary>Editor Play resumes the saved run when on (device always does).</summary>
+        public static string ResumeInEditor(bool on)
+        {
+            PlayerPrefs.SetInt("Ricochet.ResumeInEditor", on ? 1 : 0);
+            PlayerPrefs.Save();
+            return "resume in editor " + on;
+        }
+
+        /// <summary>
+        /// Run: make the current creature one hit from death and count it as encounter (n - 1), so the next hit wins
+        /// it and the run moves on to encounter n (0-based; 5 is the boss).
+        /// </summary>
+        public static string JumpTo(int encounterIndex)
+        {
+            var encounter = Object.FindAnyObjectByType<EncounterDirector>();
+            if (encounter == null) return "no encounter";
+            encounter.Run.Encounter = Mathf.Clamp(encounterIndex - 1, 0, RunState.EncountersPerRun - 1);
+            var c = encounter.Creature;
+            c.TakeDamage(c.EffectiveHp - 1);
+            return $"next kill moves on to encounter {encounterIndex + 1}; creature hp {c.Hp}";
+        }
+
         /// <summary>
         /// Fires a full-power ballistic shot straight at the nearest unlit crystal of a type ("Gold", "Amp", "Bomb",
         /// "Prism"), leaving the rest of the board alone (so a Bomb has neighbours). Exercises the crystal types.

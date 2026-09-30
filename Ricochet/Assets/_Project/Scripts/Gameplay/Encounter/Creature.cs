@@ -205,6 +205,15 @@ namespace Ricochet.Gameplay
             return dealt;
         }
 
+        /// <summary>A resumed fight: set HP and armor straight away (right after Emerge), with the bar already there.</summary>
+        public void Restore(int hp, int armor)
+        {
+            Hp = Mathf.Clamp(hp, 1, MaxHp);
+            Armor = Mathf.Max(0, armor);
+            _hpShown = _chipShown = (float)Hp / MaxHp;
+            RefreshArmor();
+        }
+
         public void AddArmor(int amount)
         {
             Armor += amount;

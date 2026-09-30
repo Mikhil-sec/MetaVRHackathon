@@ -35,6 +35,12 @@ namespace Ricochet.Gameplay
         /// <summary>While true, new points are recorded; existing ones always age out.</summary>
         public bool Emitting { get; set; }
 
+        /// <summary>The transform the ribbon follows (a split-off Spark gets its own ribbon).</summary>
+        public Transform Target { get => _target; set => _target = value; }
+
+        /// <summary>The trail's cold color (the Spark type's light); the chain still heats it toward gold.</summary>
+        public Color CoolColor { get => _coolColor; set => _coolColor = value; }
+
         void Awake()
         {
             _mesh = new Mesh { name = "SparkRibbon" };

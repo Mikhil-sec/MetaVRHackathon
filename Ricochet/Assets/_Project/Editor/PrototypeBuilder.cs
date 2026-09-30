@@ -154,7 +154,30 @@ namespace Ricochet.EditorTools
                 game.GetComponent<ScorePopups>(), crystalMesh);
             Set(drama, "_encounter", encounter);
             Set(hud, "_encounter", encounter);
+            var glyphMat = Mat("IntentGlyph", Shader.Find("Ricochet/IntentGlyph"), Color.white);
+            Set(hud, "_glyphMaterial", glyphMat);
             log.AppendLine("Encounter: rift, creature, motes, director");
+
+            // The run: pick-1-of-3 reward orbs between rifts, and the title card for its big beats.
+            var rewards = Fresh<RewardPicker>(GetOrCreate("Rewards", game.transform));
+            Set(rewards, "_playArea", playArea);
+            Set(rewards, "_sling", sling);
+            Set(rewards, "_sfx", sfx);
+            Set(rewards, "_glow", glow);
+            Set(rewards, "_fx", fx);
+            Set(rewards, "_orbMesh", spark.transform.Find("Visual").GetComponent<MeshFilter>().sharedMesh);
+            var orbMat = Mat("RewardOrb", Shader.Find("Ricochet/SparkCore"), Color.white);
+            orbMat.SetFloat("_Swirl", 0.6f);
+            orbMat.SetFloat("_RimPower", 1.8f);
+            orbMat.SetFloat("_Intensity", 1.1f);
+            Set(rewards, "_orbMaterial", orbMat);
+            Set(rewards, "_haloMaterial", HaloMat("RewardHalo", Color.white, 0.6f));
+            Set(rewards, "_glyphMaterial", glyphMat);
+            Set(encounter, "_rewards", rewards);
+            var banner = Fresh<Banner>(GetOrCreate("Banner", game.transform));
+            Set(banner, "_playArea", playArea);
+            Set(encounter, "_banner", banner);
+            log.AppendLine("Run: reward picker, banner");
             var lightGo = GetOrCreate("DesktopLight", desktop.transform);
             var light = GetOrAdd<Light>(lightGo);
             light.type = LightType.Directional;

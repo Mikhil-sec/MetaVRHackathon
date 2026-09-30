@@ -46,6 +46,13 @@ namespace Ricochet.Gameplay
 
         [Header("Crystal types")]
         [SerializeField] float _bombRadius = 0.4f;
+        [SerializeField] float _bigBangScale = 1.6f;
+
+        [Header("Spark types")]
+        [SerializeField] float _splitAngle = 32f;       // each child fans this far off the parent's bounce
+        [SerializeField] int _sparkBombHits = 3;        // the Bomb Spark bursts on this clean hit
+        [SerializeField] float _sparkBombRadius = 0.5f;
+        [SerializeField] int _maxCarom = 5;
 
         [Header("Scoring")]
         [SerializeField] int _basePoints = 10;
@@ -54,12 +61,20 @@ namespace Ricochet.Gameplay
         readonly List<Crystal> _litThisShot = new();
         readonly List<int> _litValues = new();
         readonly List<Crystal> _blast = new();
+        readonly Spark[] _children = new Spark[2];     // the Splitter's two extra Sparks, pooled
         int _mult = 1;
         bool _prismHit;
         WaitForSeconds _popWait;
         Rigidbody _sparkBody;
         int _combo;
         int _boardSeed = 1;
+        int _live;              // Sparks still flying this shot
+        bool _split, _sparkBurst, _skyCrit, _anyHit;
+        int _sparkHits, _carom;
+
+        /// <summary>The run in progress (relics and the Spark bag); null plays plain Sparks with no relics.</summary>
+        public RunState Run { get; set; }
+        bool Has(Relic relic) => Run != null && Run.Has(relic);
 
         public int Score { get; private set; }
         public int LastShotScore { get; private set; }
@@ -91,24 +106,61 @@ namespace Ricochet.Gameplay
         {
             _popWait = new WaitForSeconds(_popInterval);
             _sparkBody = _spark.GetComponent<Rigidbody>();
+            for (int i = 0; i < _children.Length; i++) _children[i] = _spark.CreateChild("SplitSpark" + i);
         }
 
         void OnEnable()
         {
             _playArea.Ready += OnRoomReady;
-            _spark.CrystalHit += OnCrystalHit;
-            _spark.RoomBounced += OnRoomBounced;
-            _spark.Died += OnSparkDied;
+            Subscribe(_spark, true);
+            for (int i = 0; i < _children.Length; i++) if (_children[i] != null) Subscribe(_children[i], true);
             _sling.Launched += OnLaunched;
         }
 
         void OnDisable()
         {
             _playArea.Ready -= OnRoomReady;
-            _spark.CrystalHit -= OnCrystalHit;
-            _spark.RoomBounced -= OnRoomBounced;
-            _spark.Died -= OnSparkDied;
+            Subscribe(_spark, false);
+            for (int i = 0; i < _children.Length; i++) if (_children[i] != null) Subscribe(_children[i], false);
             _sling.Launched -= OnLaunched;
+        }
+
+        void Subscribe(Spark spark, bool on)
+        {
+            if (on)
+            {
+                spark.CrystalHit += OnCrystalHit;
+                spark.RoomBounced += OnRoomBounced;
+                spark.Died += OnSparkDied;
+                spark.Phased += OnPhased;
+            }
+            else
+            {
+                spark.CrystalHit -= OnCrystalHit;
+                spark.RoomBounced -= OnRoomBounced;
+                spark.Died -= OnSparkDied;
+                spark.Phased -= OnPhased;
+            }
+        }
+
+        /// <summary>Loads the run's next Spark type onto the sling and arms it.</summary>
+        void ArmNext()
+        {
+            _spark.SetKind(Run != null ? Run.NextSpark : SparkKind.Plain);
+            _sling.Arm();
+        }
+
+        /// <summary>The bag changed between shots (a reward): the Spark already waiting in the sling takes the new type.</summary>
+        public void RefreshArmedKind()
+        {
+            if (_sling.IsReady) _spark.SetKind(Run != null ? Run.NextSpark : SparkKind.Plain);
+        }
+
+        /// <summary>A resumed run's score.</summary>
+        public void RestoreScore(int score, int bestCombo)
+        {
+            Score = score;
+            BestCombo = bestCombo;
         }
 
         void OnRoomReady()
@@ -128,14 +180,14 @@ namespace Ricochet.Gameplay
             else
             {
                 NewBoard();
-                _sling.Arm();
+                ArmNext();
             }
         }
 
         IEnumerator IntroThenArm()
         {
             yield return Intro(); // the intro owns board generation
-            _sling.Arm();
+            ArmNext();
         }
 
         const float HeroPull = 0.8f;
@@ -182,10 +234,15 @@ namespace Ricochet.Gameplay
             _combo = 0;
             _mult = 1;
             _prismHit = false;
+            _split = _sparkBurst = _skyCrit = _anyHit = false;
+            _sparkHits = _carom = 0;
+            _live = 1;
             LastShotScore = 0;
             ShotInProgress = true;
             _litThisShot.Clear();
             _litValues.Clear();
+            _spark.FloorGrace = Has(Relic.SecondWind) ? 1 : 0;
+            _spark.MagnetTargets = _board.Active;
             _sfx.PlayLaunch(_spark.transform.position);
         }
 
@@ -206,16 +263,28 @@ namespace Ricochet.Gameplay
                 CrystalLit?.Invoke(crystal, -1);
                 return;
             }
-            // Chain value: its place in the chain, times the shot's Amp multiplier; Gold is a critical (x2).
+            // Chain value: its place in the chain, times the shot's Amp multiplier. Criticals double it and stack:
+            // Gold, Focus (gaze; x3 with Third Eye), the shot's first hit (First Light), a hit after a ceiling
+            // bounce (Skylight).
             Vector3 at = crystal.transform.position;
-            bool focused = _focus != null && crystal == _focus.Focused;   // Focus (gaze): another critical, stacking
-            int value = NextHitValue * (crystal.Kind == CrystalKind.Gold ? 2 : 1) * (focused ? 2 : 1);
+            bool focused = _focus != null && crystal == _focus.Focused;
+            int crit = (crystal.Kind == CrystalKind.Gold ? 2 : 1) * (focused ? (Has(Relic.ThirdEye) ? 3 : 2) : 1);
+            bool relicCrit = (!_anyHit && Has(Relic.FirstLight)) || _skyCrit;
+            if (relicCrit) crit *= 2;
+            _skyCrit = false;
+            _anyHit = true;
+            int value = NextHitValue * crit;
             if (focused)
             {
-                Debug.Log($"[Ricochet] Focus critical: value {NextHitValue} -> x2");
+                Debug.Log($"[Ricochet] Focus critical: value {NextHitValue} -> x{(Has(Relic.ThirdEye) ? 3 : 2)}");
                 _sfx.PlayChord(at);
                 if (_glow != null) _glow.Pulse(at, _focusGlow, 1.4f, 0.6f);
                 if (_fx != null) _fx.Burst(at, _focusGlow);
+            }
+            if (relicCrit)
+            {
+                _sfx.PlayChord(at);
+                if (_fx != null) _fx.Burst(at, Upgrades.RelicColor);
             }
             _litValues.Add(value);
 
@@ -238,7 +307,7 @@ namespace Ricochet.Gameplay
                     if (_glow != null) _glow.Pulse(at, _popGlow * 1.3f, 1.3f, 0.6f);
                     break;
                 case CrystalKind.Amp:
-                    _mult++;
+                    _mult += Has(Relic.Resonance) ? 2 : 1;
                     _sfx.PlayGuard(at);
                     if (_glow != null) _glow.Pulse(at, _ampGlow, 1.6f, 0.7f);
                     if (_fx != null) _fx.Burst(at, _ampGlow);
@@ -248,26 +317,34 @@ namespace Ricochet.Gameplay
                     if (_glow != null) _glow.Pulse(at, _prismGlow, 1.8f, 0.8f);
                     break;
                 case CrystalKind.Bomb:
-                    Detonate(spark, crystal);
+                    Detonate(spark, at, crystal, _bombRadius * (Has(Relic.BigBang) ? _bigBangScale : 1f));
                     break;
+            }
+
+            // The Bomb Spark bursts on its third clean hit, lighting everything around it.
+            if (spark.Kind == SparkKind.Bomb && !spark.IsChild && !_sparkBurst && ++_sparkHits >= _sparkBombHits)
+            {
+                _sparkBurst = true;
+                Debug.Log("[Ricochet] Bomb Spark burst");
+                Detonate(spark, spark.transform.position, null,
+                         _sparkBombRadius * (Has(Relic.BigBang) ? _bigBangScale : 1f));
             }
         }
 
-        /// <summary>The chain value the next clean hit would carry (before a Gold critical).</summary>
-        public int NextHitValue => (1 + _combo) * _mult;
+        /// <summary>The chain value the next clean hit would carry (before criticals).</summary>
+        public int NextHitValue => (1 + _combo + _carom) * _mult;
 
-        /// <summary>A Bomb lights every clean crystal around it, each as the next hit in the chain.</summary>
-        void Detonate(Spark spark, Crystal bomb)
+        /// <summary>A blast lights every clean crystal around it, each as the next hit in the chain.</summary>
+        void Detonate(Spark spark, Vector3 at, Crystal bomb, float radius)
         {
-            Vector3 at = bomb.transform.position;
             _sfx.PlayShieldHit(at); // a low boom
-            if (_glow != null) _glow.Pulse(at, _bombGlow, _bombRadius * 3.5f, 0.9f);
+            if (_glow != null) _glow.Pulse(at, _bombGlow, radius * 3.5f, 0.9f);
             if (_fx != null) { _fx.Burst(at, _bombGlow); _fx.Burst(at, _shardColor); }
             var active = _board.Active;
             // Collect first, onto a shared stack: lighting a neighbour Bomb detonates it too (a chain reaction),
             // and that nested call pushes and pops its own segment above ours.
             int start = _blast.Count;
-            float r2 = _bombRadius * _bombRadius;
+            float r2 = radius * radius;
             for (int i = 0; i < active.Count; i++)
             {
                 var c = active[i];
@@ -282,15 +359,76 @@ namespace Ricochet.Gameplay
 
         void OnRoomBounced(Spark spark, Vector3 point, Vector3 normal)
         {
-            float strength = _sparkBody.linearVelocity.magnitude / 6f;
+            var body = spark == _spark ? _sparkBody : spark.GetComponent<Rigidbody>();
+            float strength = body.linearVelocity.magnitude / 6f;
             _sfx.PlayBounce(point, strength);
             if (_glow != null) _glow.Pulse(point, _bounceGlow * (0.35f * Mathf.Clamp01(strength)), 0.55f, 0.25f);
+            if (!ShotInProgress) return;
+
+            // Carom: every bank before the first hit raises the whole chain by one.
+            if (!_anyHit && _carom < _maxCarom && Has(Relic.Carom))
+            {
+                _carom++;
+                _sfx.PlayPullTick(_carom, point);
+                if (_glow != null) _glow.Pulse(point, Upgrades.RelicColor * 1.2f, 0.7f, 0.35f);
+            }
+            if (spark.LastBounceLabel == Meta.XR.MRUtilityKit.MRUKAnchor.SceneLabels.CEILING && Has(Relic.Skylight))
+            {
+                _skyCrit = true;
+                if (_glow != null) _glow.Pulse(point, Upgrades.RelicColor * 1.5f, 1f, 0.5f);
+            }
+            if (spark.LastBounceWasGrace)
+            {
+                _sfx.PlayChord(point); // Second Wind: the floor gives it back
+                if (_glow != null) _glow.Pulse(point, _ampGlow, 1.2f, 0.6f);
+                if (_fx != null) _fx.Burst(point, _ampGlow);
+            }
+            if (spark == _spark && spark.Kind == SparkKind.Splitter && !_split) Split(spark, point, normal);
         }
 
-        void OnSparkDied(Spark spark) => StartCoroutine(EndShot());
+        /// <summary>Splitter: on its first bounce the Spark becomes three, fanning out along the surface.</summary>
+        void Split(Spark parent, Vector3 point, Vector3 normal)
+        {
+            _split = true;
+            Vector3 v = _sparkBody.linearVelocity;
+            if (v.sqrMagnitude < 0.25f) return;
+            Vector3 at = parent.transform.position + normal * 0.03f;
+            for (int i = 0; i < _children.Length; i++)
+            {
+                var child = _children[i];
+                float angle = (i == 0 ? -1f : 1f) * _splitAngle;
+                child.gameObject.SetActive(true);
+                child.SetKind(SparkKind.Splitter);
+                child.Hold(at);
+                child.FloorGrace = 0;
+                child.Launch(Quaternion.AngleAxis(angle, normal) * v * 0.92f);
+                _live++;
+            }
+            _sfx.PlayChord(point);
+            if (_glow != null) _glow.Pulse(point, Upgrades.Color(SparkKind.Splitter) * 1.6f, 1.1f, 0.5f);
+            if (_fx != null) _fx.Burst(point, Upgrades.Color(SparkKind.Splitter));
+            Debug.Log("[Ricochet] Splitter split");
+        }
+
+        /// <summary>Ghost slipped through furniture.</summary>
+        void OnPhased(Spark spark, Vector3 point)
+        {
+            Color ghost = Upgrades.Color(SparkKind.Ghost);
+            _sfx.PlaySwell(point);
+            if (_glow != null) _glow.Pulse(point, ghost * 1.4f, 0.9f, 0.5f);
+            if (_fx != null) _fx.Burst(point, ghost);
+            Debug.Log("[Ricochet] Ghost phased through furniture");
+        }
+
+        void OnSparkDied(Spark spark)
+        {
+            if (spark != _spark) spark.gameObject.SetActive(false);
+            if (--_live <= 0) StartCoroutine(EndShot());
+        }
 
         IEnumerator EndShot()
         {
+            Run?.AdvanceBag();
             // Peggle-style sequential clear of everything lit this shot.
             for (int i = 0; i < _litThisShot.Count; i++)
             {
@@ -326,7 +464,7 @@ namespace Ricochet.Gameplay
                 yield return new WaitForSeconds(1.2f);
                 NewBoard();
             }
-            _sling.Arm();
+            ArmNext();
         }
     }
 }

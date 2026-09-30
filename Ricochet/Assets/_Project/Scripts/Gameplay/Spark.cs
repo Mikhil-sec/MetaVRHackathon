@@ -54,8 +54,35 @@ namespace Ricochet.Gameplay
         public float FlightGlow { get; set; } = 1f;
 
         static readonly int HeatId = Shader.PropertyToID("_Heat");
-        MaterialPropertyBlock _heatBlock;
-        Renderer _visualRenderer;
+        static readonly int RimColorId = Shader.PropertyToID("_RimColor");
+        static readonly int ColorId = Shader.PropertyToID("_Color");
+        MaterialPropertyBlock _heatBlock, _haloBlock;
+        Renderer _visualRenderer, _haloRenderer;
+        Collider _collider;
+
+        [Header("Spark types")]
+        [SerializeField] float _heavyScale = 1.3f;
+        [SerializeField] float _heavyKeep = 0.94f;       // speed kept plowing through each crystal
+        [SerializeField] float _magnetRange = 0.9f;
+        [SerializeField] float _magnetPull = 5f;         // m/s^2 at point blank, fading to 0 at the range
+        [SerializeField] float _childScale = 0.72f;
+
+        // Colliders passed through this shot (Ghost furniture, Heavy crystals): restored when the flight ends.
+        readonly Collider[] _ignored = new Collider[48];
+        int _ignoredCount;
+        Vector3 _preStepVelocity;
+        int _ghostCharges, _floorGrace;
+        float _kindScale = 1f;
+
+        public SparkKind Kind { get; private set; }
+        /// <summary>A split-off Spark (it never splits again and is smaller).</summary>
+        public bool IsChild { get; private set; }
+        /// <summary>Unlit crystals the Magnet type curves toward (set by the director).</summary>
+        public System.Collections.Generic.IReadOnlyList<Crystal> MagnetTargets { get; set; }
+        /// <summary>Floor touches this flight that bounce instead of ending the shot (relic Second Wind).</summary>
+        public int FloorGrace { get => _floorGrace; set => _floorGrace = value; }
+        /// <summary>The scene label of the last room surface bounced off.</summary>
+        public MRUKAnchor.SceneLabels LastBounceLabel { get; private set; }
 
         /// <summary>Chain heat 0..1: the trail and the core's rim shift from cyan toward gold.</summary>
         public void SetHeat(float heat)
@@ -66,6 +93,44 @@ namespace Ricochet.Gameplay
             _heatBlock ??= new MaterialPropertyBlock();
             _heatBlock.SetFloat(HeatId, heat);
             _visualRenderer.SetPropertyBlock(_heatBlock);
+        }
+
+        /// <summary>Loads a Spark type: its behaviour for the next flight and its light (rim and halo) while held.</summary>
+        public void SetKind(SparkKind kind)
+        {
+            Kind = kind;
+            _kindScale = (kind == SparkKind.Heavy ? _heavyScale : 1f) * (IsChild ? _childScale : 1f);
+            Color c = Upgrades.Color(kind);
+            if (_ribbon != null) { _ribbon.CoolColor = c; _ribbon.SetHeat(0f); }
+            if (_visualRenderer != null)
+            {
+                _heatBlock ??= new MaterialPropertyBlock();
+                _heatBlock.SetColor(RimColorId, c);
+                _visualRenderer.SetPropertyBlock(_heatBlock);
+            }
+            if (_haloRenderer != null)
+            {
+                _haloBlock ??= new MaterialPropertyBlock();
+                _haloBlock.SetColor(ColorId, c);
+                _haloRenderer.SetPropertyBlock(_haloBlock);
+            }
+        }
+
+        /// <summary>
+        /// A second Spark for the Splitter: a copy of this one with its own ribbon, which reports through the same
+        /// events. Built once (pooled by the director), inactive until launched.
+        /// </summary>
+        public Spark CreateChild(string name)
+        {
+            var ribbon = _ribbon != null ? Instantiate(_ribbon, _ribbon.transform.parent) : null;
+            var child = Instantiate(this, transform.parent);
+            child.name = name;
+            child.IsChild = true;
+            child._ribbon = ribbon;
+            if (ribbon != null) { ribbon.name = name + "Ribbon"; ribbon.Target = child.transform; }
+            child.gameObject.SetActive(false);
+            child.SetKind(SparkKind.Plain);
+            return child;
         }
 
         public event Action<Spark, Crystal> CrystalHit;
@@ -81,12 +146,17 @@ namespace Ricochet.Gameplay
             _body.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
             _body.mass = 0.01f;
             gameObject.layer = Layers.Spark;
+            _collider = GetComponent<Collider>();
             if (_visual != null)
             {
                 _visualScale = _visual.localScale;
                 _visualRenderer = _visual.GetComponent<Renderer>();
             }
-            if (_halo != null) _haloScale = _halo.localScale;
+            if (_halo != null)
+            {
+                _haloScale = _halo.localScale;
+                _haloRenderer = _halo.GetComponent<Renderer>();
+            }
         }
 
         /// <summary>
@@ -115,14 +185,14 @@ namespace Ricochet.Gameplay
                 axis = _stretch;
             }
             float side = 1f / Mathf.Sqrt(axis); // preserve volume
-            _visual.localScale = Vector3.Scale(_visualScale, new Vector3(side, side, axis));
+            _visual.localScale = Vector3.Scale(_visualScale, new Vector3(side, side, axis)) * _kindScale;
 
             if (_halo != null)
             {
                 float pulse = InFlight
                     ? (1.2f + 0.6f * _squashStrength * _squash) * FlightGlow
                     : (1f + 0.1f * Mathf.Sin(Time.time * 2.4f)) * HoldGlow;
-                _halo.localScale = _haloScale * pulse;
+                _halo.localScale = _haloScale * (pulse * _kindScale);
             }
         }
 
@@ -143,14 +213,18 @@ namespace Ricochet.Gameplay
             _body.isKinematic = true;
             transform.position = position;
             if (_ribbon != null) _ribbon.Emitting = false;
+            if (_ignoredCount > 0) RestoreIgnored();
         }
 
         public void Launch(Vector3 velocity)
         {
+            if (_ignoredCount > 0) RestoreIgnored();
             _flightTime = 0f;
             _slowTime = 0f;
             _squash = 0f;
             _roomBounces = 0;
+            _ghostCharges = Kind == SparkKind.Ghost ? 1 : 0;
+            _preStepVelocity = velocity;
             _body.isKinematic = false;
             _body.linearVelocity = velocity;
             _body.angularVelocity = Vector3.zero;
@@ -170,6 +244,8 @@ namespace Ricochet.Gameplay
         {
             if (!InFlight) return;
             _body.AddForce(Physics.gravity * _gravityScale, ForceMode.Acceleration);
+            if (Kind == SparkKind.Magnet && MagnetTargets != null) Steer();
+            _preStepVelocity = _body.linearVelocity;
 
             _flightTime += dt;
             _slowTime = _body.linearVelocity.magnitude < _restSpeed ? _slowTime + dt : 0f;
@@ -232,21 +308,82 @@ namespace Ricochet.Gameplay
                 return;
             }
             var contact = collision.GetContact(0);
-            Squash(collision, contact);
             if (collision.collider.TryGetComponent(out Crystal crystal))
             {
+                // Heavy keeps its line: it shatters through the crystal instead of glancing off.
+                if (Kind == SparkKind.Heavy) PassThrough(collision.collider, _heavyKeep);
+                else Squash(collision, contact);
                 CrystalHit?.Invoke(this, crystal);
                 return;
             }
+            var anchor = collision.collider.GetComponentInParent<MRUKAnchor>();
+            LastBounceLabel = anchor != null ? anchor.Label : 0;
+            if (_ghostCharges > 0 && anchor != null && (LastBounceLabel & PhaseThrough) != 0)
+            {
+                // Ghost: slips through the first piece of furniture as if it weren't there.
+                _ghostCharges--;
+                PassThrough(collision.collider, 1f);
+                Phased?.Invoke(this, contact.point);
+                return;
+            }
+            Squash(collision, contact);
             _roomBounces++;
+            bool floor = LastBounceLabel == MRUKAnchor.SceneLabels.FLOOR;
+            LastBounceWasGrace = floor && _floorEndsShot && _floorGrace > 0;
+            if (LastBounceWasGrace) _floorGrace--;
             RoomBounced?.Invoke(this, contact.point, contact.normal);
-            if (_floorEndsShot && IsFloor(collision.collider)) Die(EndReason.Floor);
+            if (_floorEndsShot && floor && !LastBounceWasGrace) Die(EndReason.Floor);
         }
 
-        static bool IsFloor(Collider collider)
+        /// <summary>The last room bounce was a floor touch forgiven by Second Wind.</summary>
+        public bool LastBounceWasGrace { get; private set; }
+
+        /// <summary>Ghost passed through furniture: (spark, point).</summary>
+        public event Action<Spark, Vector3> Phased;
+
+        // Furniture a Ghost may pass through: not the room's shell, nor things mounted flat on a wall.
+        const MRUKAnchor.SceneLabels Shell = MRUKAnchor.SceneLabels.FLOOR | MRUKAnchor.SceneLabels.CEILING |
+            MRUKAnchor.SceneLabels.WALL_FACE | MRUKAnchor.SceneLabels.INVISIBLE_WALL_FACE | MRUKAnchor.SceneLabels.INNER_WALL_FACE |
+            MRUKAnchor.SceneLabels.WALL_ART | MRUKAnchor.SceneLabels.DOOR_FRAME | MRUKAnchor.SceneLabels.WINDOW_FRAME |
+            MRUKAnchor.SceneLabels.GLOBAL_MESH;
+        const MRUKAnchor.SceneLabels PhaseThrough = ~Shell;
+
+        /// <summary>Ignore this collider for the rest of the flight and carry on at the pre-contact velocity.</summary>
+        void PassThrough(Collider other, float keep)
         {
-            var anchor = collider.GetComponentInParent<MRUKAnchor>();
-            return anchor != null && anchor.Label == MRUKAnchor.SceneLabels.FLOOR;
+            Physics.IgnoreCollision(_collider, other, true);
+            if (_ignoredCount < _ignored.Length) _ignored[_ignoredCount++] = other;
+            _body.linearVelocity = _preStepVelocity * keep;
+        }
+
+        void RestoreIgnored()
+        {
+            for (int i = 0; i < _ignoredCount; i++)
+            {
+                if (_ignored[i] != null) Physics.IgnoreCollision(_collider, _ignored[i], false);
+                _ignored[i] = null;
+            }
+            _ignoredCount = 0;
+        }
+
+        /// <summary>Magnet: a gentle pull toward the nearest unlit crystal in range, stronger the closer it is.</summary>
+        void Steer()
+        {
+            Vector3 p = _body.position;
+            float best = _magnetRange * _magnetRange;
+            Vector3 to = Vector3.zero;
+            var targets = MagnetTargets;
+            for (int i = 0; i < targets.Count; i++)
+            {
+                var c = targets[i];
+                if (c.IsLit || c.IsPopped || c.IsCorrupt) continue;
+                Vector3 d = c.transform.position - p;
+                float d2 = d.sqrMagnitude;
+                if (d2 < best) { best = d2; to = d; }
+            }
+            if (to == Vector3.zero) return;
+            float dist = Mathf.Sqrt(best);
+            _body.AddForce(to / dist * (_magnetPull * (1f - dist / _magnetRange)), ForceMode.Acceleration);
         }
 
         void Die(EndReason reason)
@@ -256,6 +393,7 @@ namespace Ricochet.Gameplay
             InFlight = false;
             _body.isKinematic = true;
             if (_ribbon != null) _ribbon.Emitting = false;
+            if (_ignoredCount > 0) RestoreIgnored();
             Died?.Invoke(this);
         }
     }
