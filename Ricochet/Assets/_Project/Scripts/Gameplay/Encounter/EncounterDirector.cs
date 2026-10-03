@@ -151,13 +151,34 @@ namespace Ricochet.Gameplay
         Vector3 CreatureHome(Vector3 mouth)
         {
             const float maxYaw = 20f;
-            Vector3 eye = _playArea.Head.position;
+            // The seat, not the live head: a lean (or a trailer camera) must not move where the creature settles.
+            Vector3 eye = _playArea.Seat.position;
             Vector3 forward = Vector3.ProjectOnPlane(_playArea.Seat.forward, Vector3.up);
             Vector3 to = mouth - eye;
             float yaw = Vector3.SignedAngle(forward, Vector3.ProjectOnPlane(to, Vector3.up), Vector3.up);
             if (Mathf.Abs(yaw) <= maxYaw) return mouth;
             Quaternion swing = Quaternion.AngleAxis(Mathf.Clamp(yaw, -maxYaw, maxYaw) - yaw, Vector3.up);
-            return eye + swing * to * 0.85f;
+            return Unblocked(eye, eye + swing * to * 0.85f);
+        }
+
+        /// <summary>
+        /// The swung home can land inside furniture (a wall cabinet over a bed hid the whole body, session 8). Walk it
+        /// toward the seat until it is out of every scene volume and the seat sees it with room to spare.
+        /// </summary>
+        Vector3 Unblocked(Vector3 eye, Vector3 home)
+        {
+            const float clearance = 0.3f, step = 0.1f;
+            var room = _playArea.Room;
+            for (int i = 0; i < 12; i++)
+            {
+                Vector3 to = home - eye;
+                float d = to.magnitude;
+                bool inside = room != null && room.IsPositionInSceneVolume(home, clearance * 0.5f);
+                bool hidden = Physics.Raycast(eye, to / d, d + clearance, 1 << Layers.Room);
+                if ((!inside && !hidden) || d < 1.5f) break;
+                home -= to / d * step;
+            }
+            return home;
         }
 
         IEnumerator OpenEncounter()
@@ -530,7 +551,7 @@ namespace Ricochet.Gameplay
 
         static IEnumerator WaitReal(float seconds)
         {
-            for (float t = 0f; t < seconds; t += Time.unscaledDeltaTime) yield return null;
+            for (float t = 0f; t < seconds; t += RealTime.DeltaTime) yield return null;
         }
     }
 }

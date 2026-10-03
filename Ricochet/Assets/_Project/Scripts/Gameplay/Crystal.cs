@@ -143,9 +143,9 @@ namespace Ricochet.Gameplay
 
             // Pop-in: OutBack. Hit: fast overshoot pulse, eased settle.
             // The highlight eases and beats (~100 bpm) in real time, so it stays alive in slow motion.
-            _highlight = Mathf.MoveTowards(_highlight, _highlightTarget, Time.unscaledDeltaTime * 4f);
+            _highlight = Mathf.MoveTowards(_highlight, _highlightTarget, RealTime.DeltaTime * 4f);
             float beat = _highlight > 0f
-                ? _highlight * (0.6f + 0.4f * Mathf.Pow(0.5f + 0.5f * Mathf.Sin(Time.unscaledTime * 10.5f), 3f))
+                ? _highlight * (0.6f + 0.4f * Mathf.Pow(0.5f + 0.5f * Mathf.Sin(RealTime.Now * 10.5f), 3f))
                 : 0f;
 
             // Specials render a touch larger so they read from the seat (visual only: the collider is unchanged).

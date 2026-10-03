@@ -17,9 +17,14 @@ namespace Ricochet.Dev
     /// </summary>
     public sealed class RoomSweep : MonoBehaviour
     {
-        enum Kind { Straight, Random, Aimed }
+        enum Kind { Straight, Random, Aimed, NearHero }
 
         const float AimNoiseDegrees = 3f;
+        // A real hand never repeats the hero shot exactly (release drag 2-7 deg seen in XR, before the lookback):
+        // extra shots within these bounds of it, with their own RNG so the other classes stay comparable.
+        const int NearHeroShots = 40;
+        const float NearHeroDegrees = 1.5f;
+        const float NearHeroPull01 = 0.12f; // +/-0.03 m of the 0.25 m pull range
         const long FrameBudgetMs = 40;
 
         public static string Status { get; private set; } = "idle";
@@ -49,8 +54,8 @@ namespace Ricochet.Dev
 
         sealed class Stats
         {
-            public readonly int[] Shots = new int[3], Hits = new int[3], AtLeastOne = new int[3], AtLeastThree = new int[3];
-            public readonly int[] Damage = new int[3]; // the chain sum 1+2+..+hits: what a shot does to the creature (no crits)
+            public readonly int[] Shots = new int[4], Hits = new int[4], AtLeastOne = new int[4], AtLeastThree = new int[4];
+            public readonly int[] Damage = new int[4]; // the chain sum 1+2+..+hits: what a shot does to the creature (no crits)
             public int Bounces, Escapes, Total;
             public float Flight;
             public readonly int[] Ends = new int[5];
@@ -155,6 +160,14 @@ namespace Ricochet.Dev
                     all.Add(kind, _hitsThisShot, bounces, _spark.FlightTime, _spark.LastEnd, escaped);
                     if (clock.ElapsedMilliseconds > FrameBudgetMs) { yield return null; clock.Restart(); }
                 }
+                var nearRng = new System.Random(seed * 13 + 5);
+                for (int i = 0; i < NearHeroShots; i++)
+                {
+                    Vector3 dir = NearHero(seat, nearRng, out float pull);
+                    FireShot(room, slingPos, dir, pull, out int bounces, out bool escaped);
+                    stats.Add(Kind.NearHero, _hitsThisShot, bounces, _spark.FlightTime, _spark.LastEnd, escaped);
+                    all.Add(Kind.NearHero, _hitsThisShot, bounces, _spark.FlightTime, _spark.LastEnd, escaped);
+                }
 
                 int straightHits = stats.Hits[(int)Kind.Straight];
                 string straightInfo = straightHits > 0 ? "" : $" first={_straightFirst}";
@@ -166,6 +179,7 @@ namespace Ricochet.Dev
                 string line = $"{prefabs[r].name,-28} n={crystals,2} straight={straightHits}{straightInfo} hero=[{_board.HeroInfo}] rift=[{rift.Info}] " +
                               $"rand={stats.Mean(Kind.Random):F2} ({stats.Pct(stats.AtLeastOne, Kind.Random):F0}%>=1) " +
                               $"aimed={aimed:F2} ({stats.Pct(stats.AtLeastOne, Kind.Aimed):F0}%>=1, {stats.Pct(stats.AtLeastThree, Kind.Aimed):F0}%>=3) " +
+                              $"near={stats.Mean(Kind.NearHero):F2} " +
                               $"reach={(crystals == 0 ? 0 : 100 * _everHit.Count / crystals)}% " +
                               $"bounce={(float)stats.Bounces / stats.Total:F1} esc={100f * stats.Escapes / stats.Total:F0}% " +
                               $"end L/R/B/F={stats.Ends[1]}/{stats.Ends[2]}/{stats.Ends[3]}/{stats.Ends[4]}";
@@ -176,6 +190,7 @@ namespace Ricochet.Dev
             string summary = $"ROOMS {roomCount} shots/room {_shotsPerRoom} floorEnds={_floorEndsShot} | " +
                              $"rand={all.Mean(Kind.Random):F2} ({all.Pct(all.AtLeastOne, Kind.Random):F0}%>=1) " +
                              $"aimed={all.Mean(Kind.Aimed):F2} ({all.Pct(all.AtLeastOne, Kind.Aimed):F0}%>=1, {all.Pct(all.AtLeastThree, Kind.Aimed):F0}%>=3) " +
+                             $"near={all.Mean(Kind.NearHero):F2} ({all.Pct(all.AtLeastOne, Kind.NearHero):F0}%>=1, {all.Pct(all.AtLeastThree, Kind.NearHero):F0}%>=3) " +
                              $"straightMiss={straightMisses} sparse(<24)={sparseBoards} floatingRift={floatingRifts} " +
                              $"bounce={(float)all.Bounces / all.Total:F1} flight={all.Flight / all.Total:F1}s esc={100f * all.Escapes / all.Total:F1}% " +
                              $"end L/R/B/F={all.Ends[1]}/{all.Ends[2]}/{all.Ends[3]}/{all.Ends[4]} worst={worstRoom} ({worstAimed:F2})";
@@ -229,6 +244,15 @@ namespace Ricochet.Dev
                     return noise * dir;
                 }
             }
+        }
+
+        Vector3 NearHero(Pose seat, System.Random rng, out float pull)
+        {
+            Vector3 right = Vector3.Cross(Vector3.up, seat.forward);
+            Vector3 hero = _board.HeroVelocity.sqrMagnitude > 0f ? _board.HeroVelocity.normalized : ShotDirector.HeroDirection(seat);
+            pull = ShotDirector.HeroPullAmount + Range(rng, -NearHeroPull01, NearHeroPull01);
+            return Quaternion.AngleAxis(Range(rng, -NearHeroDegrees, NearHeroDegrees), Vector3.up) *
+                   Quaternion.AngleAxis(Range(rng, -NearHeroDegrees, NearHeroDegrees), right) * hero;
         }
 
         void FireShot(MRUKRoom room, Vector3 slingPos, Vector3 dir, float pull, out int bounces, out bool escaped)

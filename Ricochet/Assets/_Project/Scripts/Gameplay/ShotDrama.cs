@@ -76,7 +76,7 @@ namespace Ricochet.Gameplay
         void UpdateLockRing()
         {
             if (_lockRing == null) return;
-            float dt = Time.unscaledDeltaTime;
+            float dt = RealTime.DeltaTime;
             _spin += dt * (0.2f + 1.2f * _closeness);
             float radius, intensity;
             Vector3 at;
@@ -141,7 +141,7 @@ namespace Ricochet.Gameplay
                     // moment for the next approach rather than exhaling and slamming back down a beat later.
                     if (stillLethal && FindBest(true, null, out var again, out float againDistance))
                         Retarget(again, againDistance);
-                    else if (!stillLethal || Time.unscaledTime > _lingerEnd) End(0f);
+                    else if (!stillLethal || RealTime.Now > _lingerEnd) End(0f);
                     else _warp.SlowTo(_slowScale);
                     return;
                 }
@@ -155,7 +155,7 @@ namespace Ricochet.Gameplay
                         {
                             _target.SetHighlight(0f);
                             _target = null;
-                            _lingerEnd = Time.unscaledTime + _linger;
+                            _lingerEnd = RealTime.Now + _linger;
                         }
                         return;
                     }

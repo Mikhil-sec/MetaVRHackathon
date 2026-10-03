@@ -50,9 +50,24 @@ namespace Ricochet.Room
 
         void OnDestroy() => PocketArena.Deactivate();
 
+        static readonly System.Collections.Generic.List<XRDisplaySubsystem> s_displays = new();
+
+        static bool XrStarting()
+        {
+            if (XRSettings.isDeviceActive) return false;
+            SubsystemManager.GetSubsystems(s_displays);
+            foreach (var d in s_displays)
+                if (!d.running) return true;
+            return false;
+        }
+
         IEnumerator LoadRoom()
         {
             var mruk = MRUK.Instance;
+            // XR can start a few frames after Start (Meta XR Simulator in the Editor): an XR display that exists but
+            // isn't running yet is not desktop. Deciding early loaded a prefab room in XR and moved the rig (session 8).
+            for (float t = 0f; t < 5f && XrStarting(); t += Time.unscaledDeltaTime) yield return null;
+            Debug.Log($"[Ricochet] Room source: {(IsDesktop ? "desktop" : "device")} (frame {Time.frameCount})");
 #if UNITY_EDITOR
             if (PlayerPrefs.GetInt(ForcePocketKey, 0) == 1)
             {

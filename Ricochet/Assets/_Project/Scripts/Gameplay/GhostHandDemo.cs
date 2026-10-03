@@ -55,7 +55,7 @@ namespace Ricochet.Gameplay
 
         void Update()
         {
-            float dt = Time.unscaledDeltaTime;
+            float dt = RealTime.DeltaTime;
             if (PinTime >= 0f)
             {
                 Show(true);

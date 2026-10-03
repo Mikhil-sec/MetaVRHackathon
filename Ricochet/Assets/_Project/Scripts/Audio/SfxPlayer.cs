@@ -94,7 +94,7 @@ namespace Ricochet.Audio
         {
             float target = _drumLevel * 0.85f;
             float rate = target > _drumroll.volume ? 10f : 3.5f;
-            _drumroll.volume = Mathf.Lerp(_drumroll.volume, target, 1f - Mathf.Exp(-rate * Time.unscaledDeltaTime));
+            _drumroll.volume = Mathf.Lerp(_drumroll.volume, target, 1f - Mathf.Exp(-rate * RealTime.DeltaTime));
             _drumroll.pitch = 1f + 0.15f * _drumLevel;
             if (_drumLevel > 0f && !_drumroll.isPlaying) _drumroll.Play();
             else if (_drumLevel <= 0f && _drumroll.isPlaying && _drumroll.volume < 0.01f) _drumroll.Stop();

@@ -61,7 +61,7 @@ namespace Ricochet.Gameplay
         /// <summary>Return to full speed, optionally holding the current slow-mo for a moment first (real seconds).</summary>
         public void Release(float holdSeconds = 0f)
         {
-            _holdUntil = Time.unscaledTime + holdSeconds;
+            _holdUntil = RealTime.Now + holdSeconds;
             _target = 1f;
         }
 
@@ -75,12 +75,12 @@ namespace Ricochet.Gameplay
 
         void Update()
         {
-            if (Frozen || Time.unscaledTime < _holdUntil) return;
+            if (Frozen || RealTime.Now < _holdUntil) return;
             float scale = Time.timeScale;
             if (Mathf.Approximately(scale, _target)) return;
 
             float rate = _target < scale ? _easeIn : _easeOut;
-            scale = Mathf.Lerp(scale, _target, 1f - Mathf.Exp(-rate * Time.unscaledDeltaTime));
+            scale = Mathf.Lerp(scale, _target, 1f - Mathf.Exp(-rate * RealTime.DeltaTime));
             if (Mathf.Abs(scale - _target) < 0.01f) scale = _target;
             Apply(scale);
         }

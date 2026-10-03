@@ -51,7 +51,7 @@ namespace Ricochet.Gameplay
 
         void Update()
         {
-            float dt = Time.unscaledDeltaTime;
+            float dt = RealTime.DeltaTime;
             _pop = Mathf.Max(0f, _pop - dt * 4f);
             _spin += dt * 0.35f;
 

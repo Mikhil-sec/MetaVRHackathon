@@ -101,7 +101,7 @@ namespace Ricochet.Gameplay
         void LateUpdate()
         {
             float dt = Time.deltaTime;
-            float realDt = Time.unscaledDeltaTime;
+            float realDt = RealTime.DeltaTime;
 
             // The Spark: a soft light that brightens in flight, with a slow breathing pulse while it waits.
             bool active = _spark != null && _spark.gameObject.activeInHierarchy;

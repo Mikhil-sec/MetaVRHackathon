@@ -136,7 +136,7 @@ namespace Ricochet.Gameplay
         void LateUpdate()
         {
             // UI-like feedback runs on real time: it must stay crisp even while game time is slowed.
-            float dt = Time.unscaledDeltaTime;
+            float dt = RealTime.DeltaTime;
             Vector3 anchor = _sling.transform.position;
             bool ready = _sling.IsReady, pulling = _sling.IsPulling;
 

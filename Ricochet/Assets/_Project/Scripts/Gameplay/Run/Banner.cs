@@ -96,7 +96,7 @@ namespace Ricochet.Gameplay
         void Update()
         {
             if (_clock < 0f) return;
-            _clock += Time.unscaledDeltaTime;
+            _clock += RealTime.DeltaTime;
             const float fadeIn = 0.5f, fadeOut = 0.7f;
             float a = _clock < fadeIn ? _clock / fadeIn : Mathf.Clamp01(1f - (_clock - _hold) / fadeOut);
             float settle = 1f - Mathf.Pow(1f - Mathf.Clamp01(_clock / 1.2f), 3f);

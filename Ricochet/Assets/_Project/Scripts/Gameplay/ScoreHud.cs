@@ -257,7 +257,7 @@ namespace Ricochet.Gameplay
         void LateUpdate()
         {
             if (!_score.gameObject.activeSelf) return;
-            float dt = Time.unscaledDeltaTime; // the readout is UI: it ignores slow motion
+            float dt = RealTime.DeltaTime; // the readout is UI: it ignores slow motion
 
             if (_shown > _director.Score) _shown = _director.Score; // a new run
             if (_shown < _director.Score && !_director.ShotInProgress)
@@ -306,7 +306,7 @@ namespace Ricochet.Gameplay
                 {
                     bool boss = now == _pips.Length - 1;
                     SetGlyph(_pips[now], boss ? Upgrades.GlyphCrown : Upgrades.GlyphPip, _pipNow,
-                             (1.3f + 0.5f * Mathf.Sin(Time.unscaledTime * 3f)) * _dim);
+                             (1.3f + 0.5f * Mathf.Sin(RealTime.Now * 3f)) * _dim);
                 }
                 if (Mathf.Abs(_dim - _pipDim) > 0.02f) RefreshPips(); // fade the rest of the row and the relics too
             }

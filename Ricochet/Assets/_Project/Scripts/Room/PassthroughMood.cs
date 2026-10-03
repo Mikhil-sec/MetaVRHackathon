@@ -26,6 +26,9 @@ namespace Ricochet.Room
         /// <summary>0 = the untouched room, 1 = the full game mood.</summary>
         public float Amount { get; private set; }
 
+        /// <summary>0..1, how far the room has sunk for a dramatic moment (see SetFocus).</summary>
+        public float Focus => _focus;
+
         void OnEnable() => _playArea.Ready += OnReady;
 
         void OnDisable() => _playArea.Ready -= OnReady;
@@ -46,14 +49,14 @@ namespace Ricochet.Room
 
             if (easing)
             {
-                _t += Time.unscaledDeltaTime / _easeSeconds;
+                _t += RealTime.DeltaTime / _easeSeconds;
                 Amount = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(_t));
                 if (_t >= 1f) _t = -1f;
             }
             if (focusing)
             {
                 float rate = _focusTarget > _focus ? 6f : 2.5f;
-                _focus = Mathf.Lerp(_focus, _focusTarget, 1f - Mathf.Exp(-rate * Time.unscaledDeltaTime));
+                _focus = Mathf.Lerp(_focus, _focusTarget, 1f - Mathf.Exp(-rate * RealTime.DeltaTime));
                 if (Mathf.Abs(_focus - _focusTarget) < 0.005f) _focus = _focusTarget;
             }
             if (PlayArea.IsDesktop || _layer == null) return;

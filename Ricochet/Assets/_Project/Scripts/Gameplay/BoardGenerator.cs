@@ -250,18 +250,34 @@ namespace Ricochet.Gameplay
         string PlaceRebound(HeroShot hero)
         {
             if (_reboundCrystals <= 0 || hero.Spark == null) return "off";
+            string why = ReboundLanding(hero.Spark, hero.Origin, HeroVelocity, out Vector3 point, out Vector3 n, out MRUKAnchor anchor);
+            if (why != null) return why;
+            int start = _active.Count;
+            Spawn(point + n * _surfaceOffset, n);
+            _tight = 0.8f;
+            PlaceFormation(point, n, anchor, _reboundCrystals, false);
+            _tight = 1f;
+            return $"{anchor.Label} d={(point - _seat.position).magnitude:F1} n={_active.Count - start}";
+        }
+
+        /// <summary>
+        /// Where a shot goes after the hero cluster: its next room contact, predicted with the crystals in place.
+        /// Null when that spot can hold a new cluster, else why not.
+        /// </summary>
+        string ReboundLanding(Spark spark, Vector3 origin, Vector3 velocity, out Vector3 point, out Vector3 n, out MRUKAnchor anchor)
+        {
+            anchor = null;
             Physics.SyncTransforms();
             // Off the centre crystal, the next room contact is the rebound. If the flight slips past the crystals
             // and touches the wall inside the hero cluster instead, the rebound is the contact after that.
-            if (!hero.Spark.PredictFirstContact(hero.Origin, HeroVelocity, out Vector3 point, out Vector3 n,
-                    out Collider collider))
+            if (!spark.PredictFirstContact(origin, velocity, out point, out n, out Collider collider))
                 return "none";
             if (HeroPoint.HasValue && (point - HeroPoint.Value).sqrMagnitude < 0.3f * 0.3f &&
-                !hero.Spark.PredictFirstContact(hero.Origin, HeroVelocity, out point, out n, out collider, 3f, 1))
+                !spark.PredictFirstContact(origin, velocity, out point, out n, out collider, 3f, 1))
                 return "none2";
-            var anchor = collider.GetComponentInParent<MRUKAnchor>();
+            anchor = collider.GetComponentInParent<MRUKAnchor>();
             if (anchor == null || !SpawnFilter.PassesFilter(anchor.Label)) return collider.name;
-            RefineContact(hero.Spark, collider, anchor, ref point, ref n);
+            RefineContact(spark, collider, anchor, ref point, ref n);
             float d = (point - _seat.position).magnitude;
             if (d < _minDistance) return $"near d={d:F1}";
             if (!InForwardView(point, false)) return "outOfView";
@@ -269,13 +285,7 @@ namespace Ricochet.Gameplay
             if (_room.IsPositionInSceneVolume(center) || Excluded(center)) return "blocked";
             foreach (var c in _active)
                 if ((c.transform.position - center).sqrMagnitude < _minSpacing * _minSpacing) return "inCluster";
-
-            int start = _active.Count;
-            Spawn(center, n);
-            _tight = 0.8f;
-            PlaceFormation(point, n, anchor, _reboundCrystals, false);
-            _tight = 1f;
-            return $"{anchor.Label} d={d:F1} n={_active.Count - start}";
+            return null;
         }
 
         /// <summary>A plane's normal (its forward), or the volume face whose normal is nearest n, signed toward n.</summary>

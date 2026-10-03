@@ -153,7 +153,7 @@ namespace Ricochet.Gameplay
             {
                 // Aim from just before the fingers started opening, not the dragged last frames.
                 Vector3 lastPull = _smoothedPull;
-                _smoothedPull = PullAt(Time.unscaledTime - _releaseLookback);
+                _smoothedPull = PullAt(RealTime.Now - _releaseLookback);
                 if (_smoothedPull.magnitude >= _minPull)
                 {
                     Vector3 v = LaunchVelocity();
@@ -171,7 +171,7 @@ namespace Ricochet.Gameplay
         void RecordPull()
         {
             _pullHistory[_historyHead] = _smoothedPull;
-            _pullTimes[_historyHead] = Time.unscaledTime;
+            _pullTimes[_historyHead] = RealTime.Now;
             _historyHead = (_historyHead + 1) % HistorySize;
             if (_historyCount < HistorySize) _historyCount++;
         }

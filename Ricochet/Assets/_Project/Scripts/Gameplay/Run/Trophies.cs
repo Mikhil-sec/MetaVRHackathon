@@ -261,7 +261,7 @@ namespace Ricochet.Gameplay
             {
                 var s = _shown[i];
                 if (s.Grow >= 1f || s.Root == null) continue;
-                s.Grow = Mathf.Min(1f, s.Grow + Time.unscaledDeltaTime / 1.1f);
+                s.Grow = Mathf.Min(1f, s.Grow + RealTime.DeltaTime / 1.1f);
                 s.Root.localScale = Vector3.one * OutBack(s.Grow);
             }
         }

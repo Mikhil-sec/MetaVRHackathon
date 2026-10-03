@@ -207,7 +207,7 @@ namespace Ricochet.Gameplay
         void Update()
         {
             if (_state == State.Hidden) return;
-            float dt = Time.unscaledDeltaTime;
+            float dt = RealTime.DeltaTime;
             _clock += dt;
 
             switch (_state)
