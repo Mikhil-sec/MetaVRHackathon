@@ -32,12 +32,15 @@ namespace Ricochet.Gameplay
         [SerializeField] Material _orbMaterial;
         [SerializeField] Material _haloMaterial;
         [SerializeField] Material _glyphMaterial;
+        [SerializeField] Material _scrimMaterial;
 
         [Header("Layout (relative to the seated eye)")]
         [SerializeField] float _distance = 0.42f;     // the sling's reach
         [SerializeField] float _drop = 0.08f;         // below eye level, above the heart (TECH_GUIDE section 6)
         [SerializeField] float _spreadDeg = 22f;      // inside the +/-25 degree band (TECH_GUIDE section 7)
         [SerializeField] float _orbRadius = 0.03f;
+        [SerializeField] Vector2 _cardSize = new(0.125f, 0.17f); // the dark card behind each orb's words
+        [SerializeField] float _cardOpacity = 0.62f;
 
         [Header("Gesture")]
         [SerializeField] float _grabRadius = 0.07f;
@@ -57,8 +60,8 @@ namespace Ricochet.Gameplay
 
         sealed class Orb
         {
-            public Transform Root, Core, Halo, Glyph;
-            public MeshRenderer CoreR, HaloR, GlyphR;
+            public Transform Root, Core, Halo, Glyph, Card;
+            public MeshRenderer CoreR, HaloR, GlyphR, CardR;
             public TextMeshPro Name, Blurb;
             public Vector3 Home;
             public Vector3 Offset;       // drawn out of the slot by the hand
@@ -96,8 +99,14 @@ namespace Ricochet.Gameplay
             o.Core = Part("Core", o.Root, _orbMesh, _orbMaterial, out o.CoreR);
             o.Halo = Part("Halo", o.Root, Quad(), _haloMaterial, out o.HaloR);
             o.Glyph = Part("Glyph", o.Root, Quad(), _glyphMaterial, out o.GlyphR);
-            o.Name = Text("Name", o.Root, 0.017f, FontStyles.Bold);
-            o.Blurb = Text("Blurb", o.Root, 0.0115f, FontStyles.Normal);
+            if (_scrimMaterial != null)
+            {
+                // The card hangs in the slot (not on the orb), like the words, so a drawn orb leaves it behind.
+                o.Card = Part("Card", o.Root, Quad(), _scrimMaterial, out o.CardR);
+                o.Card.SetParent(transform, false);
+            }
+            o.Name = Text("Name", o.Root, 0.0185f, FontStyles.Bold);
+            o.Blurb = Text("Blurb", o.Root, 0.0135f, FontStyles.Normal);
             return o;
         }
 
@@ -144,7 +153,12 @@ namespace Ricochet.Gameplay
 
         void SetVisible(bool on)
         {
-            for (int i = 0; i < _orbs.Length; i++) _orbs[i].Root.gameObject.SetActive(on && i < _count);
+            for (int i = 0; i < _orbs.Length; i++)
+            {
+                bool show = on && i < _count;
+                _orbs[i].Root.gameObject.SetActive(show);
+                if (_orbs[i].Card != null) _orbs[i].Card.gameObject.SetActive(show);
+            }
         }
 
         /// <summary>Offers the rewards and waits until one is taken (read Chosen afterwards).</summary>
@@ -401,8 +415,19 @@ namespace Ricochet.Gameplay
                 o.Name.transform.position = o.Home + bob + Vector3.up * (_orbRadius + 0.024f);
                 o.Blurb.transform.position = o.Home + bob + Vector3.down * (_orbRadius + 0.03f);
                 o.Name.transform.rotation = o.Blurb.transform.rotation = Quaternion.LookRotation(o.Home - eye, Vector3.up);
-                o.Name.alpha = textAlpha * (0.85f + 0.15f * o.Hover);
-                o.Blurb.alpha = textAlpha * (0.55f + 0.45f * o.Hover);
+                o.Name.alpha = textAlpha * (0.9f + 0.1f * o.Hover);
+                o.Blurb.alpha = textAlpha * (0.75f + 0.25f * o.Hover);
+
+                if (o.CardR != null)
+                {
+                    // Centered on the words' span, a little behind the orb, so the orb and its glow sit on the card.
+                    Vector3 away = (o.Home - eye).normalized;
+                    o.Card.SetPositionAndRotation(o.Home + bob + Vector3.down * 0.012f + away * 0.02f, o.Name.transform.rotation);
+                    o.Card.localScale = new Vector3(_cardSize.x, _cardSize.y, 1f) * (1f + 0.04f * o.Hover);
+                    _block.Clear();
+                    _block.SetFloat(IntensityId, textAlpha * _cardOpacity * (0.85f + 0.15f * o.Hover));
+                    o.CardR.SetPropertyBlock(_block);
+                }
             }
         }
 

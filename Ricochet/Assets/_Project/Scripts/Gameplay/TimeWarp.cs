@@ -30,9 +30,26 @@ namespace Ricochet.Gameplay
             Apply(Mathf.Clamp(scale, 0.001f, 1f));
         }
 
+        /// <summary>A true stop (the player left): game time is exactly 0 until Unfreeze, which eases back in.</summary>
+        public void Stop()
+        {
+            Frozen = true;
+            Time.timeScale = 0f; // no physics steps run at 0, so the physics step is left as it was
+        }
+
         public void Unfreeze() => Frozen = false;
 
-        void Awake() => s_baseStep = Time.fixedDeltaTime;
+        void Awake()
+        {
+            s_baseStep = Time.fixedDeltaTime;
+            // The game always steps physics itself; a sweep or prediction interrupted in the Editor can leave Script
+            // mode saved in ProjectSettings, which silently freezes every shot.
+            if (Physics.simulationMode != SimulationMode.FixedUpdate)
+            {
+                Debug.LogWarning($"[Ricochet] Physics simulation mode was {Physics.simulationMode}; restoring FixedUpdate");
+                Physics.simulationMode = SimulationMode.FixedUpdate;
+            }
+        }
 
         /// <summary>Ease game time toward this scale (0..1) until Release.</summary>
         public void SlowTo(float scale)

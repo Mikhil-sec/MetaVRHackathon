@@ -62,7 +62,7 @@ namespace Ricochet.Gameplay
         public float Glyph => Type switch
         {
             RewardType.Spark => Upgrades.Glyph(Spark),
-            RewardType.Relic => Upgrades.GlyphRelic,
+            RewardType.Relic => Upgrades.Glyph(Relic),
             _ => Upgrades.GlyphMend,
         };
     }
@@ -152,6 +152,14 @@ namespace Ricochet.Gameplay
             SparkKind.Heavy => 7f,
             _ => GlyphPip,
         };
+
+        /// <summary>Each relic draws its own rule (IntentGlyph kinds 13..22, in bit order).</summary>
+        public static float Glyph(Relic relic)
+        {
+            int bit = 0;
+            for (int v = (int)relic; v > 1; v >>= 1) bit++;
+            return relic == Relic.None ? GlyphRelic : 13f + bit;
+        }
 
         /// <summary>
         /// Fills three distinct rewards: at least one new Spark type and one relic while any are left, and a Mend

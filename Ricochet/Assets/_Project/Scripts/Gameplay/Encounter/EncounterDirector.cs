@@ -31,10 +31,11 @@ namespace Ricochet.Gameplay
         [SerializeField] ScorePopups _popups;
         [SerializeField] RewardPicker _rewards;
         [SerializeField] Banner _banner;
+        [SerializeField] Trophies _trophies;
 
         [Header("Rules")]
         [SerializeField] int _maxShield = 30;
-        [SerializeField] int _shieldRestore = 12;
+        [SerializeField] int _shieldRestore = 15;
         [SerializeField] int _refreshBelow = 12;         // fewer crystals left than this: a fresh board next turn
         [SerializeField] int _feverPoints = 50;
         [SerializeField] int _aegisShield = 10;
@@ -172,7 +173,7 @@ namespace Ricochet.Gameplay
             Debug.Log($"[Ricochet] Encounter {_run.Encounter + 1}/{RunState.EncountersPerRun}: {_def.Name} (HP {_def.Hp}), rift {place.Info}");
             _rift.Open(place.Position, place.Normal);
             _sfx.PlayRiftOpen(place.Position);
-            if (_def.Boss && _banner != null) _banner.Show(_def.Name, "the last rift", _burstColor, 3.2f);
+            if (_def.Boss && _banner != null) _banner.Show(_def.Name, "the last rift", _def.Identity.a > 0f ? _def.Identity / Mathf.Max(1f, _def.Identity.maxColorComponent) : _burstColor, 3.2f);
             yield return Wait(_def.Boss ? 1.6f : 0.9f);
 
             _creature.Emerge(_def, place.Position, CreatureHome(_rift.Mouth), _playArea.Head);
@@ -462,6 +463,23 @@ namespace Ricochet.Gameplay
             RunChanged?.Invoke();
         }
 
+        /// <summary>The Queen's crown stays on the wall where her rift was (behind a floating rift: the wall beyond it).</summary>
+        void PlaceTrophy()
+        {
+            if (_trophies == null) return;
+            Vector3 position = _placement.Position, normal = _placement.Normal;
+            if (!_placement.OnWall)
+            {
+                Vector3 eye = _playArea.Seat.position;
+                Vector3 dir = (position - eye).normalized;
+                if (!_playArea.Room.Raycast(new Ray(eye, dir), 10f, out RaycastHit hit, out var anchor) || anchor == null ||
+                    (anchor.Label & Meta.XR.MRUtilityKit.MRUKAnchor.SceneLabels.WALL_FACE) == 0) return;
+                position = hit.point;
+                normal = hit.normal;
+            }
+            _trophies.Place(position, normal, _director.Score, _director.BestCombo);
+        }
+
         /// <summary>The boss is sealed: the whole room answers in waves of light, then a new run begins.</summary>
         IEnumerator RunComplete()
         {
@@ -476,7 +494,8 @@ namespace Ricochet.Gameplay
                 if (_fx != null) { _fx.Burst(center, _shardColor); _fx.Burst(center, _burstColor); }
                 yield return WaitReal(0.7f);
             }
-            if (_banner != null) _banner.Show("Rift sealed", $"{_director.Score:N0}", _shardColor, 4.5f);
+            PlaceTrophy();
+            if (_banner != null) _banner.Show("Rift sealed", $"score {_director.Score:N0}    best chain ×{_director.BestCombo}", _shardColor, 4.5f);
             yield return WaitReal(5f);
 
             _lastRift = null;

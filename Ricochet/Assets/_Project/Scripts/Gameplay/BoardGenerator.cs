@@ -28,6 +28,10 @@ namespace Ricochet.Gameplay
         [SerializeField, Range(0f, 0.5f)] float _looseFraction = 0.1f;
         [SerializeField] float _formationSpacing = 0.18f;
         [SerializeField] float _minSpacing = 0.15f;
+        [SerializeField] int _heroMinCrystals = 6;     // the first straight shot's cluster, center included
+        static readonly float[] HeroTightening = { 1f, 0.8f, 0.68f }; // small landing surfaces pack the grid closer
+        float _tight = 1f;
+        int _rejSurface, _rejAnchor, _rejNear, _rejVolume, _rejSight; // hero grid diagnostics (board generation only)
         [SerializeField] float _minDistance = 0.9f;
         [SerializeField] float _maxDistance = 4.5f;
         [SerializeField] float _heroMinDistance = 1.2f;
@@ -97,9 +101,25 @@ namespace Ricochet.Gameplay
                 Vector3 center = heroPos + heroNormal * _surfaceOffset;
                 bool centerBlocked = _room.IsPositionInSceneVolume(center);
                 if (!centerBlocked && !Excluded(center)) Spawn(center, heroNormal);
-                PlaceFormation(heroPos, heroNormal, heroAnchor, _formationSize.y, false);
+                // A small landing surface (a table, a cabinet top) clips the grid to a few crystals, so the first,
+                // natural shot would score one. Pack it closer until the cluster is worth hitting (colliders ~9 cm).
+                int start = _active.Count;
+                _rejSurface = _rejAnchor = _rejNear = _rejVolume = _rejSight = 0;
+                foreach (float tight in HeroTightening)
+                {
+                    _tight = tight;
+                    PlaceFormation(heroPos, heroNormal, heroAnchor, _formationSize.y, false);
+                    if (_active.Count >= _heroMinCrystals || tight == HeroTightening[HeroTightening.Length - 1]) break;
+                    for (int i = _active.Count - 1; i >= start; i--)
+                    {
+                        _active[i].gameObject.SetActive(false);
+                        _active.RemoveAt(i);
+                    }
+                }
+                _tight = 1f;
                 float pitch = Vector3.Angle(Vector3.ProjectOnPlane(HeroVelocity, Vector3.up), HeroVelocity);
-                HeroInfo = $"{heroAnchor.Label} d={(heroPos - seat.position).magnitude:F1} pitch={pitch:F0} n={_active.Count}{(centerBlocked ? " centerInVolume" : "")}";
+                HeroInfo = $"{heroAnchor.Label} d={(heroPos - seat.position).magnitude:F1} pitch={pitch:F0} n={_active.Count}{(centerBlocked ? " centerInVolume" : "")}" +
+                           (_active.Count < _heroMinCrystals ? $" rej surf/anchor/near/vol/sight={_rejSurface}/{_rejAnchor}/{_rejNear}/{_rejVolume}/{_rejSight}" : "");
             }
 
             for (int guard = 0; _active.Count < formationTarget && guard < _attempts; guard++)
@@ -153,17 +173,20 @@ namespace Ricochet.Gameplay
         {
             Vector3 right = Vector3.Cross(Vector3.up, _seat.forward);
             HeroVelocity = hero.Velocity;
+            var why = new System.Text.StringBuilder("none:"); // board generation only, never per frame
             foreach (float extraPitch in HeroPitches)
             {
                 hero.Velocity = Quaternion.AngleAxis(-extraPitch, right) * HeroVelocity;
-                if (TryHeroLanding(hero, out pos, out normal, out anchor))
+                if (TryHeroLanding(hero, out pos, out normal, out anchor, why))
                 {
                     float d = (pos - _seat.position).magnitude;
-                    if (d < _heroMinDistance || d > _heroMaxDistance) continue;
+                    if (d < _heroMinDistance || d > _heroMaxDistance) { why.Append($" {extraPitch:F0}:d={d:F1}"); continue; }
                     HeroVelocity = hero.Velocity;
                     return true;
                 }
+                why.Append($"@{extraPitch:F0}");
             }
+            HeroInfo = why.ToString();
             pos = normal = default;
             anchor = null;
             return false;
@@ -175,19 +198,53 @@ namespace Ricochet.Gameplay
         /// Where the hero launch first touches the room, predicted with the real Spark physics (an analytic arc
         /// drifted from the simulated flight in some rooms), if that surface can hold crystals.
         /// </summary>
-        bool TryHeroLanding(HeroShot hero, out Vector3 pos, out Vector3 normal, out MRUKAnchor anchor)
+        bool TryHeroLanding(HeroShot hero, out Vector3 pos, out Vector3 normal, out MRUKAnchor anchor,
+                            System.Text.StringBuilder why = null)
         {
             pos = normal = default;
             anchor = null;
-            if (hero.Spark == null ||
-                !hero.Spark.PredictFirstContact(hero.Origin, hero.Velocity, out Vector3 point, out Vector3 n, out Collider collider))
+            if (hero.Spark == null) { why?.Append(" noSpark"); return false; }
+            if (!hero.Spark.PredictFirstContact(hero.Origin, hero.Velocity, out Vector3 point, out Vector3 n, out Collider collider))
+            {
+                why?.Append(" noContact");
                 return false;
+            }
             // The contact is on the room collider's surface; trust it (MRUK re-raycasts disagree at edges and volumes).
             anchor = collider.GetComponentInParent<MRUKAnchor>();
-            if (anchor == null || !SpawnFilter.PassesFilter(anchor.Label)) return false;
+            if (anchor == null || !SpawnFilter.PassesFilter(anchor.Label))
+            {
+                why?.Append($" {collider.name}");
+                return false;
+            }
+            // The physics contact can be speculative (reported up to one step, ~14 cm, before the Spark touches),
+            // and on an edge its normal points at no face. Follow the flight on to where it meets the collider it
+            // touched (the surface the Spark really hits, which can sit a few cm off MRUK's analytic face), so the
+            // cluster stays on the shot's line in front of that surface, with the surface's own normal.
+            Vector3 v = hero.Spark.PredictedVelocity.normalized;
+            if (collider.Raycast(new Ray(point - v * 0.3f, v), out RaycastHit surf, 0.8f))
+            {
+                point = surf.point;
+                n = surf.normal;
+            }
+            else n = FaceNormal(anchor, n);
             pos = point;
             normal = n;
             return true;
+        }
+
+        /// <summary>A plane's normal (its forward), or the volume face whose normal is nearest n, signed toward n.</summary>
+        static Vector3 FaceNormal(MRUKAnchor anchor, Vector3 n)
+        {
+            Transform t = anchor.transform;
+            Vector3 best = t.forward;
+            float bestDot = Vector3.Dot(best, n);
+            if (anchor.VolumeBounds.HasValue)
+            {
+                float up = Vector3.Dot(t.up, n), right = Vector3.Dot(t.right, n);
+                if (Mathf.Abs(up) > Mathf.Abs(bestDot)) { best = t.up; bestDot = up; }
+                if (Mathf.Abs(right) > Mathf.Abs(bestDot)) { best = t.right; bestDot = right; }
+            }
+            return bestDot < 0f ? -best : best;
         }
 
         bool TrySampleCenter(out Vector3 pos, out Vector3 normal, out MRUKAnchor anchor)
@@ -250,8 +307,9 @@ namespace Ricochet.Gameplay
             foreach (Vector2 p in _shape)
             {
                 Vector2 r = new(p.x * cs - p.y * sn, p.x * sn + p.y * cs);
-                Vector3 onPlane = center + (u * r.x + v * r.y) * _formationSpacing;
-                if (!OnSurface(onPlane, normal, out RaycastHit hit, out MRUKAnchor hitAnchor) || hitAnchor != anchor) continue;
+                Vector3 onPlane = center + (u * r.x + v * r.y) * (_formationSpacing * _tight);
+                if (!OnSurface(onPlane, normal, out RaycastHit hit, out MRUKAnchor hitAnchor)) { _rejSurface++; continue; }
+                if (hitAnchor != anchor) { _rejAnchor++; continue; }
                 if (randomShape && !InForwardView(hit.point, false)) continue;
                 TrySpawn(hit.point + normal * _surfaceOffset, normal);
             }
@@ -311,9 +369,9 @@ namespace Ricochet.Gameplay
 
         bool TrySpawn(Vector3 position, Vector3 normal)
         {
-            if (_active.Count >= _targetCount || !FarFromOthers(position)) return false;
-            if (_room.IsPositionInSceneVolume(position)) return false; // hidden inside furniture
-            if (!VisibleFromSling(position)) return false;             // hidden behind furniture
+            if (_active.Count >= _targetCount || !FarFromOthers(position)) { _rejNear++; return false; }
+            if (_room.IsPositionInSceneVolume(position)) { _rejVolume++; return false; } // hidden inside furniture
+            if (!VisibleFromSling(position)) { _rejSight++; return false; }             // hidden behind furniture
             Spawn(position, normal);
             return true;
         }
@@ -356,7 +414,7 @@ namespace Ricochet.Gameplay
         bool FarFromOthers(Vector3 p)
         {
             if (Excluded(p)) return false;
-            float min2 = _minSpacing * _minSpacing;
+            float min2 = _minSpacing * _tight * _minSpacing * _tight;
             foreach (var c in _active)
                 if ((c.transform.position - p).sqrMagnitude < min2) return false;
             return true;

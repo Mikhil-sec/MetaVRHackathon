@@ -38,24 +38,28 @@ namespace Ricochet.Gameplay
         public int Seed = 1;
         /// <summary>The run's last rift: bigger, announced, and sealing it ends the run.</summary>
         public bool Boss;
+        /// <summary>Rim and tendril glow; alpha 0 keeps the material's magenta (the boss wears royal gold).</summary>
+        public Color Identity;
 
         /// <summary>One run: five creatures that escalate, then the boss (RunState.EncountersPerRun).</summary>
         public static readonly CreatureDef[] Roster =
         {
             // Wisp: a few short, fine wisps. Shade: many long streamers. Maw: a heavy, stubby fringe.
             // Lurker: a spindly thicket that hexes. Warden: a squat armored bell. The Hollow Queen: a vast long-trailed crown.
-            new() { Name = "Wisp", Hp = 14, Size = 0.24f, Cycle = new[] { A(3), A(4), G(4) },
+            // Balance (session 6, sweep aimedDmg ~5.5 per shot before crits): an average player takes about
+            // 3/4/6/6/7/10 shots, and loses about 15-25% of the shield early, ~45% mid-run and ~65% to the Queen.
+            new() { Name = "Wisp", Hp = 14, Size = 0.24f, Cycle = new[] { A(2), A(3), G(3) },
                     Tendrils = 5, TendrilLength = 0.8f, TendrilWidth = 0.11f, Seed = 3 },
-            new() { Name = "Shade", Hp = 20, Size = 0.28f, Cycle = new[] { A(4), H(3), A(5), G(5) },
+            new() { Name = "Shade", Hp = 20, Size = 0.28f, Cycle = new[] { A(3), H(3), A(4), G(4) },
                     Tendrils = 7, TendrilLength = 1.35f, TendrilWidth = 0.09f, Seed = 5 },
-            new() { Name = "Maw", Hp = 26, Size = 0.32f, Cycle = new[] { G(6), A(6), H(4), A(7) },
+            new() { Name = "Maw", Hp = 26, Size = 0.32f, Cycle = new[] { G(5), A(4), H(3), A(5) },
                     Tendrils = 4, TendrilLength = 0.65f, TendrilWidth = 0.18f, Seed = 8 },
-            new() { Name = "Lurker", Hp = 28, Size = 0.27f, Cycle = new[] { H(3), A(5), H(4), A(7) },
+            new() { Name = "Lurker", Hp = 28, Size = 0.27f, Cycle = new[] { H(3), A(4), H(4), A(5) },
                     Tendrils = 10, TendrilLength = 1.1f, TendrilWidth = 0.055f, Seed = 11 },
-            new() { Name = "Warden", Hp = 34, Size = 0.34f, Cycle = new[] { G(8), A(6), G(6), A(9) },
+            new() { Name = "Warden", Hp = 30, Size = 0.34f, Cycle = new[] { G(6), A(4), G(5), A(6) },
                     Tendrils = 6, TendrilLength = 0.45f, TendrilWidth = 0.24f, Seed = 13 },
-            new() { Name = "The Hollow Queen", Hp = 56, Size = 0.42f, Boss = true,
-                    Cycle = new[] { A(6), H(4), G(8), A(9), H(5), A(11) },
+            new() { Name = "The Hollow Queen", Hp = 50, Size = 0.42f, Boss = true, Identity = new Color(1.5f, 1.12f, 0.5f, 1f),
+                    Cycle = new[] { A(4), H(4), G(6), A(5), H(5), A(7) },
                     Tendrils = 12, TendrilLength = 1.6f, TendrilWidth = 0.1f, Seed = 17 },
         };
 
@@ -73,7 +77,7 @@ namespace Ricochet.Gameplay
             {
                 Name = baseDef.Name, Hp = Mathf.RoundToInt(baseDef.Hp * k), Size = baseDef.Size, Cycle = cycle,
                 Tendrils = baseDef.Tendrils, TendrilLength = baseDef.TendrilLength, TendrilWidth = baseDef.TendrilWidth,
-                Seed = baseDef.Seed, Boss = baseDef.Boss,
+                Seed = baseDef.Seed, Boss = baseDef.Boss, Identity = baseDef.Identity,
             };
         }
 

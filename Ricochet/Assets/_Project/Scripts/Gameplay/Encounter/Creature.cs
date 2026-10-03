@@ -18,6 +18,8 @@ namespace Ricochet.Gameplay
         static readonly int ColorId = Shader.PropertyToID("_Color");
         static readonly int KindId = Shader.PropertyToID("_Kind");
         static readonly int IntensityId = Shader.PropertyToID("_Intensity");
+        static readonly int RimColorId = Shader.PropertyToID("_RimColor");
+        static readonly int GlowId = Shader.PropertyToID("_Glow");
 
         [SerializeField] Mesh _bodyMesh;
         [SerializeField] Mesh _shardMesh;
@@ -32,9 +34,11 @@ namespace Ricochet.Gameplay
         [SerializeField] Color _barBackColor = new(0.06f, 0.02f, 0.08f);
 
         Transform _body, _eyeL, _eyeR, _hud;
-        readonly Transform[] _shards = new Transform[3];
+        readonly Transform[] _shards = new Transform[6]; // 3 orbit a creature; the boss stands all 6 up as a crown
         MeshRenderer _bodyRenderer;
-        readonly MeshRenderer[] _shardRenderers = new MeshRenderer[3];
+        readonly MeshRenderer[] _shardRenderers = new MeshRenderer[6];
+        bool _boss;
+        Color _identity;
         Transform _fill, _chip;
         MeshRenderer _fillRenderer, _chipRenderer, _backRenderer;
         MeshRenderer _tendrilRenderer, _intentGlyph, _armorGlyph;
@@ -165,6 +169,9 @@ namespace Ricochet.Gameplay
             _distanceScale = Mathf.Clamp(distance / 2.6f, 1f, 2.4f);
             _size = def.Size * _distanceScale;
             _tendrilFilter.sharedMesh = EncounterMeshes.Tendrils(def.Tendrils, def.TendrilLength, def.TendrilWidth, def.Seed);
+            _boss = def.Boss;
+            _identity = def.Identity;
+            for (int i = 3; i < _shardRenderers.Length; i++) _shardRenderers[i].enabled = _boss;
             _from = riftPosition;
             _home = home;
             _viewer = viewer;
@@ -278,13 +285,32 @@ namespace Ricochet.Gameplay
             _body.localScale = new Vector3(s * (1f + squash), s * (1f - squash), s * (1f + squash));
             _body.localRotation = Quaternion.Euler(8f * Mathf.Sin(t * 1.1f) - 12f * _windup, 0f, 6f * Mathf.Sin(t * 0.7f));
 
-            // Shards orbit the crown; they spin up with the windup.
-            for (int i = 0; i < _shards.Length; i++)
+            if (_boss)
             {
-                float a = t * (1.2f + 3f * _windup) + i * Mathf.PI * 2f / _shards.Length;
-                _shards[i].localPosition = new Vector3(Mathf.Cos(a), 0.9f + 0.1f * Mathf.Sin(a * 2f), Mathf.Sin(a)) * s * 0.85f;
-                _shards[i].localRotation = Quaternion.Euler(30f * Mathf.Sin(a), a * Mathf.Rad2Deg, 25f);
-                _shards[i].localScale = Vector3.one * s * 0.28f;
+                // The Queen's crown: six shards stand upright in a slowly turning ring above her, the front ones tallest
+                // so it reads as a crown from the seat; the windup lifts and splays it.
+                for (int i = 0; i < _shards.Length; i++)
+                {
+                    float a = t * (0.35f + 1.5f * _windup) + i * Mathf.PI * 2f / _shards.Length;
+                    float front = 0.5f + 0.5f * Mathf.Sin(a);               // +z faces the viewer
+                    var radial = new Vector3(Mathf.Cos(a), 0f, Mathf.Sin(a));
+                    float lift = 0.46f + 0.02f * Mathf.Sin(t * 1.3f + i) + 0.08f * _windup;
+                    _shards[i].localPosition = (radial * 0.27f + Vector3.up * lift) * s;
+                    // Each point leans out from the head (and splays wider on the windup).
+                    _shards[i].localRotation = Quaternion.AngleAxis(16f + 18f * _windup, Vector3.Cross(Vector3.up, radial));
+                    _shards[i].localScale = new Vector3(0.11f, 0.25f + 0.09f * front, 0.11f) * s;
+                }
+            }
+            else
+            {
+                // Shards orbit the crown; they spin up with the windup.
+                for (int i = 0; i < 3; i++)
+                {
+                    float a = t * (1.2f + 3f * _windup) + i * Mathf.PI * 2f / 3f;
+                    _shards[i].localPosition = new Vector3(Mathf.Cos(a), 0.9f + 0.1f * Mathf.Sin(a * 2f), Mathf.Sin(a)) * s * 0.85f;
+                    _shards[i].localRotation = Quaternion.Euler(30f * Mathf.Sin(a), a * Mathf.Rad2Deg, 25f);
+                    _shards[i].localScale = Vector3.one * s * 0.28f;
+                }
             }
 
             // Eyes: two small lights on the front face that blink now and then.
@@ -302,8 +328,15 @@ namespace Ricochet.Gameplay
             _block.SetColor(TintId, _tint * tintBoost);
             _block.SetFloat(FlashId, _flash);
             _block.SetFloat(EnergyId, Mathf.Max(_windup, 0.6f * _lunge));
+            if (_identity.a > 0f)
+            {
+                _block.SetColor(RimColorId, _identity);
+                _block.SetColor(GlowId, _identity);
+            }
             _bodyRenderer.SetPropertyBlock(_block);
             _tendrilRenderer.SetPropertyBlock(_block);
+            // The boss's crown burns pale gold (a standing half-flash), so it reads as light, not as dark horns.
+            if (_boss) _block.SetFloat(FlashId, Mathf.Max(_flash, 0.42f));
             for (int i = 0; i < _shardRenderers.Length; i++) _shardRenderers[i].SetPropertyBlock(_block);
 
             UpdateHud(dt, s, appear * dead);

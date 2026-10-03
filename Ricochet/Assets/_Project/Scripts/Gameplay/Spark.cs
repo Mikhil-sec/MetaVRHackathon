@@ -276,6 +276,7 @@ namespace Ricochet.Gameplay
             for (float t = 0f; t < maxTime && _predictedCollider == null; t += dt)
             {
                 _body.AddForce(Physics.gravity * _gravityScale, ForceMode.Acceleration);
+                PredictedVelocity = _body.linearVelocity; // the approach velocity, kept from the step that touches
                 Physics.Simulate(dt);
             }
             Hold(origin);
@@ -290,6 +291,9 @@ namespace Ricochet.Gameplay
         }
 
         bool _predicting;
+
+        /// <summary>The flight velocity just before the predicted first contact (PredictFirstContact).</summary>
+        public Vector3 PredictedVelocity { get; private set; }
         Collider _predictedCollider;
         Vector3 _predictedPoint, _predictedNormal;
 

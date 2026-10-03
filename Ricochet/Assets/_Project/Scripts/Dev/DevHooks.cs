@@ -97,6 +97,15 @@ namespace Ricochet.Dev
             return "autopick " + index;
         }
 
+        /// <summary>Stand in for taking the headset off (true) or putting it back on (false).</summary>
+        public static string Away(bool away)
+        {
+            var life = Object.FindAnyObjectByType<LifecyclePause>();
+            if (life == null) return "no LifecyclePause";
+            life.Simulate(away);
+            return "paused=" + LifecyclePause.Paused + " timeScale=" + Time.timeScale;
+        }
+
         public static string RunInfo()
         {
             var encounter = Object.FindAnyObjectByType<EncounterDirector>();

@@ -23,6 +23,15 @@ namespace Ricochet.Dev
         const long FrameBudgetMs = 40;
 
         public static string Status { get; private set; } = "idle";
+
+        // Stopping Play mid-sweep must not leave physics in Script mode: in the Editor that sticks in ProjectSettings
+        // and the next Play has a Spark that never flies (cost an afternoon, session 6).
+        void OnDisable()
+        {
+            if (!Status.StartsWith("room")) return;
+            Physics.simulationMode = SimulationMode.FixedUpdate;
+            Status = "aborted";
+        }
         public static string Report { get; private set; } = "";
 
         GameObject[] _rooms;
@@ -41,6 +50,7 @@ namespace Ricochet.Dev
         sealed class Stats
         {
             public readonly int[] Shots = new int[3], Hits = new int[3], AtLeastOne = new int[3], AtLeastThree = new int[3];
+            public readonly int[] Damage = new int[3]; // the chain sum 1+2+..+hits: what a shot does to the creature (no crits)
             public int Bounces, Escapes, Total;
             public float Flight;
             public readonly int[] Ends = new int[5];
@@ -49,7 +59,7 @@ namespace Ricochet.Dev
             {
                 Flight += flight;
                 int k = (int)kind;
-                Shots[k]++; Hits[k] += hits;
+                Shots[k]++; Hits[k] += hits; Damage[k] += hits * (hits + 1) / 2;
                 if (hits >= 1) AtLeastOne[k]++;
                 if (hits >= 3) AtLeastThree[k]++;
                 Bounces += bounces; Total++;
@@ -57,6 +67,7 @@ namespace Ricochet.Dev
             }
 
             public float Mean(Kind k) => Shots[(int)k] == 0 ? 0f : (float)Hits[(int)k] / Shots[(int)k];
+            public float MeanDamage(Kind k) => Shots[(int)k] == 0 ? 0f : (float)Damage[(int)k] / Shots[(int)k];
             public float Pct(int[] a, Kind k) => Shots[(int)k] == 0 ? 0f : 100f * a[(int)k] / Shots[(int)k];
         }
 
@@ -161,6 +172,11 @@ namespace Ricochet.Dev
                              $"straightMiss={straightMisses} sparse(<24)={sparseBoards} floatingRift={floatingRifts} " +
                              $"bounce={(float)all.Bounces / all.Total:F1} flight={all.Flight / all.Total:F1}s esc={100f * all.Escapes / all.Total:F1}% " +
                              $"end L/R/B/F={all.Ends[1]}/{all.Ends[2]}/{all.Ends[3]}/{all.Ends[4]} worst={worstRoom} ({worstAimed:F2})";
+            // Balance: aimed damage per shot, and how many aimed shots each creature takes (HP only, lap 1).
+            float dmg = Mathf.Max(0.01f, all.MeanDamage(Kind.Aimed));
+            var kill = new System.Text.StringBuilder($" | aimedDmg={dmg:F2} killShots");
+            foreach (var def in CreatureDef.Roster) kill.Append($" {def.Name.Replace("The ", "")}={def.Hp / dmg:F1}");
+            summary += kill.ToString();
             report.AppendLine(summary);
             Debug.Log("[Sweep] " + summary);
             Report = report.ToString();

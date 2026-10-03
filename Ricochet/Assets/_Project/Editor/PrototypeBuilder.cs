@@ -120,6 +120,9 @@ namespace Ricochet.EditorTools
 
             // Juice: last-crystal slow motion and the score readout.
             var warp = Fresh<TimeWarp>(game);
+            Set(director, "_warp", warp);
+            var lifecycle = Fresh<LifecyclePause>(game);
+            Set(lifecycle, "_warp", warp);
             var drama = Fresh<ShotDrama>(game);
             Set(drama, "_spark", spark);
             Set(drama, "_board", board);
@@ -173,9 +176,22 @@ namespace Ricochet.EditorTools
             Set(rewards, "_orbMaterial", orbMat);
             Set(rewards, "_haloMaterial", HaloMat("RewardHalo", Color.white, 0.6f));
             Set(rewards, "_glyphMaterial", glyphMat);
+            var scrimMat = Mat("Scrim", Shader.Find("Ricochet/Scrim"), new Color(0.035f, 0.015f, 0.07f, 1f));
+            Set(rewards, "_scrimMaterial", scrimMat);
             Set(encounter, "_rewards", rewards);
+            Set(hud, "_picker", rewards);
             var banner = Fresh<Banner>(GetOrCreate("Banner", game.transform));
             Set(banner, "_playArea", playArea);
+            Set(banner, "_scrimMaterial", scrimMat);
+            var trophies = Fresh<Trophies>(GetOrCreate("Trophies", game.transform));
+            Set(trophies, "_playArea", playArea);
+            Set(trophies, "_crystalMesh", crystalMesh);
+            Set(trophies, "_crystalMaterial", crystalMat);
+            Set(trophies, "_haloMaterial", HaloMat("TrophyHalo", Color.white, 0.6f));
+            Set(trophies, "_sfx", sfx);
+            Set(trophies, "_fx", fx);
+            Set(trophies, "_glow", glow);
+            Set(encounter, "_trophies", trophies);
             Set(encounter, "_banner", banner);
             log.AppendLine("Run: reward picker, banner");
             var lightGo = GetOrCreate("DesktopLight", desktop.transform);

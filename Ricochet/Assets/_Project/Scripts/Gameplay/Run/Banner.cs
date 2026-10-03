@@ -16,16 +16,37 @@ namespace Ricochet.Gameplay
         [SerializeField] float _distance = 1.2f;
         [SerializeField] float _lift = 0.06f;
         [SerializeField] float _titleScale = 0.075f;
-        [SerializeField] float _subtitleScale = 0.035f;
+        [SerializeField] float _subtitleScale = 0.045f;
+        [SerializeField] Material _scrimMaterial;   // a dark card behind the words, so they read over a bright room
+        [SerializeField] float _cardOpacity = 0.66f;
 
         TextMeshPro _title, _subtitle;
+        Transform _card;
+        MeshRenderer _cardR;
+        MaterialPropertyBlock _block;
+        static readonly int IntensityId = Shader.PropertyToID("_Intensity");
         float _clock = -1f, _hold;
         Color _color;
 
         void Awake()
         {
             _title = Text("Title", 0f, _titleScale, FontStyles.Bold | FontStyles.UpperCase);
-            _subtitle = Text("Subtitle", -0.075f, _subtitleScale, FontStyles.Normal);
+            _subtitle = Text("Subtitle", -0.085f, _subtitleScale, FontStyles.Bold);
+            _subtitle.outlineWidth = 0.24f;
+            if (_scrimMaterial != null)
+            {
+                _block = new MaterialPropertyBlock();
+                var go = new GameObject("Card");
+                go.transform.SetParent(transform, false);
+                go.transform.localPosition = new Vector3(0f, -0.03f, 0.03f); // just behind the words
+                go.AddComponent<MeshFilter>().sharedMesh = RewardPicker.Quad();
+                _cardR = go.AddComponent<MeshRenderer>();
+                _cardR.sharedMaterial = _scrimMaterial;
+                _cardR.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                _cardR.receiveShadows = false;
+                _card = go.transform;
+                go.SetActive(false);
+            }
             gameObject.SetActive(true);
             _title.gameObject.SetActive(false);
             _subtitle.gameObject.SetActive(false);
@@ -43,7 +64,7 @@ namespace Ricochet.Gameplay
             text.textWrappingMode = TextWrappingModes.NoWrap;
             text.fontStyle = style;
             text.rectTransform.sizeDelta = new Vector2(30f, 2f);
-            text.outlineWidth = 0.18f;
+            text.outlineWidth = 0.28f;
             text.outlineColor = new Color32(16, 6, 30, 255);
             return text;
         }
@@ -61,6 +82,14 @@ namespace Ricochet.Gameplay
             _clock = 0f;
             _title.gameObject.SetActive(true);
             _subtitle.gameObject.SetActive(true);
+            if (_card != null)
+            {
+                // Sized to the settled title (once per banner, not per frame).
+                _title.characterSpacing = 8f;
+                float w = _title.GetPreferredValues(title).x * _titleScale;
+                _card.localScale = new Vector3(Mathf.Clamp(w + 0.34f, 0.6f, 1.05f), 0.3f, 1f);
+                _card.gameObject.SetActive(true);
+            }
             Update();
         }
 
@@ -74,13 +103,21 @@ namespace Ricochet.Gameplay
             float leave = Mathf.Clamp01((_clock - _hold) / fadeOut);
             _title.characterSpacing = Mathf.Lerp(40f, 8f, settle) + 30f * leave;
             _subtitle.characterSpacing = Mathf.Lerp(24f, 4f, settle) + 20f * leave;
-            _title.color = new Color(Mathf.Min(1f, _color.r + 0.3f), Mathf.Min(1f, _color.g + 0.3f), Mathf.Min(1f, _color.b + 0.3f), a);
-            _subtitle.color = new Color(0.9f, 0.86f, 1f, a * 0.9f);
+            // Bright, nearly white with the beat's hue: on the dark card it reads from the seat.
+            Color hue = Color.Lerp(_color, Color.white, 0.55f);
+            _title.color = new Color(hue.r, hue.g, hue.b, a);
+            _subtitle.color = new Color(0.95f, 0.92f, 1f, a);
+            if (_cardR != null)
+            {
+                _block.SetFloat(IntensityId, a * _cardOpacity);
+                _cardR.SetPropertyBlock(_block);
+            }
             if (_clock > _hold + fadeOut)
             {
                 _clock = -1f;
                 _title.gameObject.SetActive(false);
                 _subtitle.gameObject.SetActive(false);
+                if (_card != null) _card.gameObject.SetActive(false);
             }
         }
     }

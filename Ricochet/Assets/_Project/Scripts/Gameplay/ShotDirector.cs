@@ -20,6 +20,7 @@ namespace Ricochet.Gameplay
         [SerializeField] SfxPlayer _sfx;
         [SerializeField] RoomGlow _glow;
         [SerializeField] ShatterFx _fx;
+        [SerializeField] TimeWarp _warp;
         [SerializeField] ScorePopups _popups;
         [SerializeField] Oculus.Interaction.Input.Hand _leftHand;
         [SerializeField] Oculus.Interaction.Input.Hand _rightHand;
@@ -225,7 +226,7 @@ namespace Ricochet.Gameplay
         {
             int count = _board.Generate(_playArea.Room, _playArea.Seat, _boardSeed++, HeroShot(_playArea.Seat));
             if (BoardShaper != null) count = BoardShaper();
-            Debug.Log($"[Ricochet] Board generated: {count} crystals in room '{_playArea.Room.name}'");
+            Debug.Log($"[Ricochet] Board generated: {count} crystals in room '{_playArea.Room.name}', hero {_board.HeroInfo}");
             BoardGenerated?.Invoke();
         }
 
@@ -406,7 +407,13 @@ namespace Ricochet.Gameplay
             }
             _sfx.PlayChord(point);
             if (_glow != null) _glow.Pulse(point, Upgrades.Color(SparkKind.Splitter) * 1.6f, 1.1f, 0.5f);
-            if (_fx != null) _fx.Burst(point, Upgrades.Color(SparkKind.Splitter));
+            if (_fx != null)
+            {
+                _fx.Burst(point, Upgrades.Color(SparkKind.Splitter), 2.2f);
+                _fx.Burst(point, Color.white, 1.2f);
+            }
+            // A beat of slow time so the fork reads from the seat (never while the drama owns time).
+            if (_warp != null && !_warp.IsWarped) _warp.Hold(0.25f, 0.12f);
             Debug.Log("[Ricochet] Splitter split");
         }
 

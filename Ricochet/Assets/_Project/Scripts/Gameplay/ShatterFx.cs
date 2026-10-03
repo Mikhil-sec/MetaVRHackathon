@@ -82,8 +82,8 @@ namespace Ricochet.Gameplay
             }
         }
 
-        /// <summary>A burst of shards flying out of a popped crystal.</summary>
-        public void Burst(Vector3 position, Color color)
+        /// <summary>A burst of shards flying out of a popped crystal. ringScale widens the shock ring for bigger beats.</summary>
+        public void Burst(Vector3 position, Color color, float ringScale = 1f)
         {
             var ps = _pool[_next];
             _next = (_next + 1) % _pool.Length;
@@ -102,6 +102,7 @@ namespace Ricochet.Gameplay
             _ringColor[_nextRing] = color;
             _nextRing = (_nextRing + 1) % _rings.Length;
             ring.transform.position = position;
+            ring.transform.localScale = Vector3.one * (_ringSize * ringScale);
             ring.enabled = true;
         }
 

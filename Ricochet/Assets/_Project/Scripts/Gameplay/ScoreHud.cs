@@ -37,8 +37,11 @@ namespace Ricochet.Gameplay
 
         [Header("Run progress (a row of pips under the shield: five creatures, then the crown)")]
         [SerializeField] Material _glyphMaterial;
-        [SerializeField] float _pipSize = 0.012f;
-        [SerializeField] float _pipSpacing = 0.018f;
+        [SerializeField] RewardPicker _picker;          // the HUD steps aside while you choose a reward
+        [SerializeField] float _pipSize = 0.016f;
+        [SerializeField] float _pipSpacing = 0.022f;
+        [SerializeField] float _relicSize = 0.019f;     // owned relics: a row of their glyphs under the score
+        [SerializeField] float _relicSpacing = 0.024f;
         [SerializeField] Color _pipDone = new(1f, 0.8f, 0.4f);
         [SerializeField] Color _pipAhead = new(0.6f, 0.5f, 0.85f);
         [SerializeField] Color _pipNow = new(1f, 0.45f, 0.85f);
@@ -47,8 +50,12 @@ namespace Ricochet.Gameplay
         static readonly int ColorId = Shader.PropertyToID("_Color");
         static readonly int IntensityId = Shader.PropertyToID("_Intensity");
         readonly MeshRenderer[] _pips = new MeshRenderer[RunState.EncountersPerRun];
+        readonly MeshRenderer[] _relics = new MeshRenderer[10];
+        readonly float[] _relicKinds = new float[10];
+        int _relicCount;
         MaterialPropertyBlock _block;
         int _pipNowIndex = -1;
+        float _pipDim = 1f;
 
         TextMeshPro _score, _line, _shield, _shieldLabel;
         float _shown, _rollSpeed;
@@ -80,20 +87,35 @@ namespace Ricochet.Gameplay
             root.localPosition = new Vector3(_left * 2f, -0.074f, 0f);
             for (int i = 0; i < _pips.Length; i++)
             {
-                var go = new GameObject("Pip" + i);
-                go.transform.SetParent(root, false);
                 bool boss = i == _pips.Length - 1;
                 float size = _pipSize * (boss ? 1.6f : 1f);
-                go.transform.localPosition = new Vector3(_pipSpacing * i + size * 0.5f + (boss ? _pipSize * 0.3f : 0f), 0f, 0f);
-                go.transform.localScale = Vector3.one * size;
-                go.AddComponent<MeshFilter>().sharedMesh = RewardPicker.Quad();
-                var r = go.AddComponent<MeshRenderer>();
-                r.sharedMaterial = _glyphMaterial;
-                r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-                r.receiveShadows = false;
-                _pips[i] = r;
+                _pips[i] = GlyphQuad("Pip" + i, root, new Vector3(_pipSpacing * i + size * 0.5f + (boss ? _pipSize * 0.3f : 0f), 0f, 0f), size);
             }
             root.gameObject.SetActive(false);
+
+            // Relics grow leftward from under the score's right edge (the edge nearest the sling).
+            var relics = new GameObject("Relics").transform;
+            relics.SetParent(transform, false);
+            relics.localPosition = new Vector3(0f, -0.078f, 0f);
+            for (int i = 0; i < _relics.Length; i++)
+            {
+                _relics[i] = GlyphQuad("Relic" + i, relics, new Vector3(-_relicSpacing * i - _relicSize * 0.5f, 0f, 0f), _relicSize);
+                _relics[i].gameObject.SetActive(false);
+            }
+        }
+
+        MeshRenderer GlyphQuad(string name, Transform parent, Vector3 localPos, float size)
+        {
+            var go = new GameObject(name);
+            go.transform.SetParent(parent, false);
+            go.transform.localPosition = localPos;
+            go.transform.localScale = Vector3.one * size;
+            go.AddComponent<MeshFilter>().sharedMesh = RewardPicker.Quad();
+            var r = go.AddComponent<MeshRenderer>();
+            r.sharedMaterial = _glyphMaterial;
+            r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            r.receiveShadows = false;
+            return r;
         }
 
         void RefreshPips()
@@ -101,22 +123,35 @@ namespace Ricochet.Gameplay
             if (_block == null || _encounter == null || _encounter.Run == null) return;
             int now = _encounter.Encounter;
             _pipNowIndex = now;
+            _pipDim = _dim;
             for (int i = 0; i < _pips.Length; i++)
             {
                 bool boss = i == _pips.Length - 1;
                 float kind = boss ? Upgrades.GlyphCrown : i < now ? Upgrades.GlyphPip + 1f : Upgrades.GlyphPip;
                 Color c = i < now ? _pipDone : i == now ? _pipNow : _pipAhead;
-                SetPip(i, kind, c, i < now ? 1.4f : i == now ? 1.6f : 0.7f);
+                SetGlyph(_pips[i], kind, c, (i < now ? 1.4f : i == now ? 1.6f : 0.7f) * _dim);
+            }
+
+            // Owned relics, in bit order (the order of the glyph kinds).
+            int owned = _encounter.Run.Relics;
+            _relicCount = 0;
+            for (int bit = 0; bit < _relics.Length; bit++)
+                if ((owned & (1 << bit)) != 0) _relicKinds[_relicCount++] = 13f + bit;
+            for (int i = 0; i < _relics.Length; i++)
+            {
+                bool show = i < _relicCount;
+                _relics[i].gameObject.SetActive(show);
+                if (show) SetGlyph(_relics[i], _relicKinds[i], Upgrades.RelicColor, 1.3f * _dim);
             }
         }
 
-        void SetPip(int i, float kind, Color color, float intensity)
+        void SetGlyph(MeshRenderer r, float kind, Color color, float intensity)
         {
             _block.Clear();
             _block.SetFloat(KindId, kind);
             _block.SetColor(ColorId, color);
             _block.SetFloat(IntensityId, intensity);
-            _pips[i].SetPropertyBlock(_block);
+            r.SetPropertyBlock(_block);
         }
 
         void OnEnable()
@@ -241,9 +276,13 @@ namespace Ricochet.Gameplay
 
             _scorePunch = Mathf.Max(0f, _scorePunch - dt * 3f);
             _linePunch = Mathf.Max(0f, _linePunch - dt * 4f);
-            // While the Spark flies, the score steps back so the room and the chain carry the moment.
-            float dimTarget = _director.ShotInProgress ? 0.55f : 1f;
-            _dim = Mathf.Lerp(_dim, dimTarget, 1f - Mathf.Exp(-6f * dt));
+            // While the Spark flies, the score steps back so the room and the chain carry the moment; while a reward
+            // is offered it steps aside entirely (the orbs sit in the same band of the view).
+            float dimTarget = _picker != null && _picker.IsChoosing ? 0f : _director.ShotInProgress ? 0.55f : 1f;
+            _dim = Mathf.Lerp(_dim, dimTarget, 1f - Mathf.Exp(-(dimTarget < _dim ? 10f : 6f) * dt));
+            Color lineC = _line.color;
+            lineC.a = _dim;
+            _line.color = lineC;
 
             _score.transform.localScale = Vector3.one * (_scoreScale * (1f + 0.12f * _scorePunch));
             _line.transform.localScale = Vector3.one * (_lineScale * (1f + 0.35f * Punch(_linePunch)));
@@ -266,9 +305,10 @@ namespace Ricochet.Gameplay
                 if (_block != null && now >= 0 && now < _pips.Length)
                 {
                     bool boss = now == _pips.Length - 1;
-                    SetPip(now, boss ? Upgrades.GlyphCrown : Upgrades.GlyphPip, _pipNow,
-                           (1.3f + 0.5f * Mathf.Sin(Time.unscaledTime * 3f)) * _dim);
+                    SetGlyph(_pips[now], boss ? Upgrades.GlyphCrown : Upgrades.GlyphPip, _pipNow,
+                             (1.3f + 0.5f * Mathf.Sin(Time.unscaledTime * 3f)) * _dim);
                 }
+                if (Mathf.Abs(_dim - _pipDim) > 0.02f) RefreshPips(); // fade the rest of the row and the relics too
             }
         }
 

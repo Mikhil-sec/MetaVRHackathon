@@ -107,7 +107,42 @@ Shader "Ricochet/IntentGlyph"
                 return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
             }
 
-            // The reward and progress glyphs (kind 3..12): a stroke distance (line), solid marks, and a faint interior.
+            // Two barbs closing the segment a->b at b.
+            float Arrowhead(float2 p, float2 a, float2 b)
+            {
+                float2 dir = normalize(b - a), n = float2(-dir.y, dir.x);
+                return min(Segment(p, b, b - dir * 0.26 + n * 0.17), Segment(p, b, b - dir * 0.26 - n * 0.17));
+            }
+
+            // A four-point sparkle: two crossed thin diamonds (approximate distance, fine for a solid mark).
+            float Star4(float2 p, float s)
+            {
+                float2 q = abs(p);
+                float t = s * 0.28;
+                return min((q.x / t + q.y / s - 1.0) * t, (q.y / t + q.x / s - 1.0) * t);
+            }
+
+            // Exact rhombus distance (Inigo Quilez), half-extents b.
+            float Rhombus(float2 p, float2 b)
+            {
+                p = abs(p);
+                float2 pb = b - 2.0 * p;
+                float h = clamp((pb.x * b.x - pb.y * b.y) / dot(b, b), -1.0, 1.0);
+                float d = length(p - 0.5 * b * float2(1.0 - h, 1.0 + h));
+                return d * sign(p.x * b.y + p.y * b.x - b.x * b.y);
+            }
+
+            // Distance to a circular arc of radius r, centered on direction ang, spanning +/-halfAperture (radians).
+            float ArcAt(float2 p, float ang, float halfAperture, float r)
+            {
+                float s = sin(1.5708 - ang), c = cos(1.5708 - ang);
+                float2 q = float2(c * p.x - s * p.y, s * p.x + c * p.y);   // ang now points along +y
+                q.x = abs(q.x);
+                float2 sc = float2(sin(halfAperture), cos(halfAperture));
+                return (sc.y * q.x > sc.x * q.y) ? length(q - sc * r) : abs(length(q) - r);
+            }
+
+            // The reward and progress glyphs (kind 3..22): a stroke distance (line), solid marks, and a faint interior.
             void RewardGlyph(float2 p, float kind, out float line_, out float fill)
             {
                 float d = 1e5, inside = 1e5, solid = 1e5;
@@ -204,9 +239,108 @@ Shader "Ricochet/IntentGlyph"
                     d = abs(length(p) - 0.55);            // pip ring: an encounter still ahead
                     w *= 1.4;
                 }
-                else
+                else if (kind < 12.5)
                 {
                     solid = length(p) - 0.62;               // pip disc: an encounter sealed
+                }
+                // Relics (kind 13..22): each mark draws its rule.
+                else if (kind < 13.5)
+                {
+                    // Carom: a bank shot zig-zagging between two walls, ending in an arrow.
+                    float2 a = float2(-0.78, -0.5), b = float2(-0.3, 0.6), c = float2(0.2, -0.38), e = float2(0.7, 0.55);
+                    d = min(Segment(p, a, b), min(Segment(p, b, c), Segment(p, c, e)));
+                    d = min(d, Arrowhead(p, c, e));
+                    solid = min(Box(p - float2(-0.3, 0.74), float2(0.28, 0.045)), Box(p - float2(0.2, -0.52), float2(0.28, 0.045)));
+                    solid = min(solid, length(p - a) - 0.1);
+                }
+                else if (kind < 14.5)
+                {
+                    // Skylight: off the ceiling and down into a critical star.
+                    // A steep climb, a long glancing fall with an arrow, so it reads as a bounce, not a letter.
+                    float2 a = float2(-0.8, -0.72), b = float2(-0.42, 0.6), c = float2(0.3, -0.16);
+                    d = min(Segment(p, a, b), Segment(p, b, c));
+                    d = min(d, Arrowhead(p, b, c));
+                    solid = min(Box(p - float2(0.0, 0.74), float2(0.8, 0.05)), Star4(p - float2(0.6, -0.5), 0.36));
+                }
+                else if (kind < 15.5)
+                {
+                    // First Light: a sun rising over the horizon.
+                    float2 c = float2(0.0, -0.3);
+                    float up = c.y - p.y;                    // < 0 above the horizon
+                    float disc = length(p - c) - 0.4;
+                    inside = max(disc, up);
+                    d = max(abs(disc), up);
+                    d = min(d, Segment(p, float2(-0.88, -0.3), float2(0.88, -0.3)));
+                    for (int k = 0; k < 5; k++)
+                    {
+                        float ang = 0.5236 * (k + 1);       // 30..150 degrees
+                        float2 r = float2(cos(ang), sin(ang));
+                        d = min(d, Segment(p, c + r * 0.56, c + r * 0.84));
+                    }
+                }
+                else if (kind < 16.5)
+                {
+                    // Gold Rush: three cut gems.
+                    float2 g = float2(0.25, 0.36);
+                    inside = min(Rhombus(p - float2(0.0, 0.36), g), min(Rhombus(p - float2(-0.46, -0.32), g), Rhombus(p - float2(0.46, -0.32), g)));
+                    d = abs(inside);
+                }
+                else if (kind < 17.5)
+                {
+                    // Aegis: a shield with a plus (more shield).
+                    inside = Shield(p);
+                    d = abs(inside);
+                    solid = min(Box(p - float2(0.0, 0.08), float2(0.065, 0.3)), Box(p - float2(0.0, 0.08), float2(0.3, 0.065)));
+                }
+                else if (kind < 18.5)
+                {
+                    // Thornlight: a ring grown with thorns (hit it and it hits back).
+                    d = abs(length(p) - 0.38);
+                    for (int k = 0; k < 6; k++)
+                    {
+                        float ang = 1.0472 * k + 0.5236;
+                        float2 r = float2(cos(ang), sin(ang));
+                        float2 a = r * 0.38, b = r * 0.9;
+                        float2 pa = p - a, ba = b - a;
+                        float h = saturate(dot(pa, ba) / dot(ba, ba));
+                        solid = min(solid, length(pa - ba * h) - 0.12 * (1.0 - h));
+                    }
+                }
+                else if (kind < 19.5)
+                {
+                    // Big Bang: a bomb inside two broken shock rings.
+                    inside = length(p) - 0.27;
+                    solid = length(p) - 0.12;
+                    d = abs(inside);
+                    for (int k = 0; k < 4; k++)
+                    {
+                        float ang = 1.5708 * k;
+                        d = min(d, ArcAt(p, ang + 0.7854, 0.5, 0.56));
+                        d = min(d, ArcAt(p, ang, 0.42, 0.84));
+                    }
+                }
+                else if (kind < 20.5)
+                {
+                    // Third Eye: an eye with a third, cut gem above it.
+                    float2 q = (p - float2(0.0, -0.18)) * 1.08;
+                    inside = EyeOutline(q);
+                    d = abs(inside);
+                    solid = min(length(q) - 0.2, Rhombus(p - float2(0.0, 0.6), float2(0.15, 0.22)));
+                }
+                else if (kind < 21.5)
+                {
+                    // Second Wind: a fall that bounces off the floor instead of ending.
+                    float2 a = float2(-0.72, 0.6), b = float2(-0.1, -0.46), c = float2(0.2, -0.06), e = float2(0.42, 0.22), f = float2(0.72, 0.42);
+                    d = min(Segment(p, a, b), min(Segment(p, b, c), min(Segment(p, c, e), Segment(p, e, f))));
+                    d = min(d, Arrowhead(p, e, f));
+                    solid = Box(p - float2(0.0, -0.66), float2(0.8, 0.05));
+                }
+                else
+                {
+                    // Resonance: a source ringing out in three waves.
+                    float2 c = float2(-0.48, 0.0);
+                    solid = length(p - c) - 0.15;
+                    d = min(ArcAt(p - c, 0.0, 0.8, 0.38), min(ArcAt(p - c, 0.0, 0.75, 0.68), ArcAt(p - c, 0.0, 0.7, 0.98)));
                 }
                 float aa = fwidth(d) + 1e-4;
                 float aaS = fwidth(solid) + 1e-4;
