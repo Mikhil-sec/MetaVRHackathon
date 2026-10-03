@@ -74,6 +74,13 @@ namespace Ricochet.Dev
         public static void Run(int shotsPerRoom = 120, int roomLimit = 0, bool floorEndsShot = true) =>
             Run(null, shotsPerRoom, roomLimit, floorEndsShot);
 
+        /// <summary>Sweep the Pocket Arena (the no-scan fallback) as a single room, seated at the origin.</summary>
+        public static void RunPocket(int shotsPerRoom = 400, bool floorEndsShot = true)
+        {
+            var eye = new Pose(new Vector3(0f, PlayArea.SeatedEyeHeight, 0f), Quaternion.identity);
+            Run(new[] { PocketArena.BuildLayout(eye, 0f) }, shotsPerRoom, 0, floorEndsShot);
+        }
+
         /// <summary>Sweep an explicit room list (e.g. every MRUK prefab, loaded by the Editor); null uses the scene settings.</summary>
         public static void Run(GameObject[] rooms, int shotsPerRoom = 120, int roomLimit = 0, bool floorEndsShot = true)
         {
@@ -231,7 +238,7 @@ namespace Ricochet.Dev
             _firstLabel = null;
             escaped = false;
 
-            _spark.Hold(slingPos);
+            _spark.Hold(_sling.LaunchPoint(slingPos, dir, pull));
             Physics.SyncTransforms();
             _spark.Launch(_sling.VelocityFor(dir, pull));
 

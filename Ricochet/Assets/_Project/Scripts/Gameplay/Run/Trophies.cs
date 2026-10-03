@@ -13,6 +13,8 @@ namespace Ricochet.Gameplay
     /// runs. The anchors' UUIDs (plus score, chain and date) live in persistentDataPath/trophies.json; on the next
     /// launch they are loaded, localized and bound, and the crowns grow back where they were.
     /// Without anchors (desktop Play) the stored pose is used instead, which is only meaningful in the same room.
+    /// The Pocket Arena (no scan) moves with the player, so its crowns are kept in the seat's frame, unanchored, and
+    /// grow back on the arena's walls; anchored crowns from scanned-room runs still restore in the real room.
     /// Visual only: no colliders, so the board, the Spark and the sweep never see them.
     /// </summary>
     public sealed class Trophies : MonoBehaviour
@@ -43,6 +45,7 @@ namespace Ricochet.Gameplay
             public int Chain;
             public string Date = "";
             public string Room = "";                    // the stored pose only means something in the same room
+                                                        // (PocketArena.RoomKey: the pose is in the seat's frame)
             public Vector3 Position;
             public Quaternion Rotation = Quaternion.identity;
         }
@@ -66,7 +69,7 @@ namespace Ricochet.Gameplay
 
         public int Count => _shelf.Items.Count;
         static string FilePath => Path.Combine(Application.persistentDataPath, "trophies.json");
-        static bool AnchorsAvailable => !PlayArea.IsDesktop;
+        static bool AnchorsAvailable => !PlayArea.IsDesktop && !PlayArea.IsPocket;
         string RoomName => _playArea.Room != null ? _playArea.Room.name : "";
 
         void Awake() => _block = new MaterialPropertyBlock();
@@ -106,8 +109,12 @@ namespace Ricochet.Gameplay
             var uuids = new List<Guid>();
             foreach (var r in _shelf.Items)
             {
-                if (AnchorsAvailable && Guid.TryParse(r.Uuid, out Guid id)) uuids.Add(id);
-                else if (!AnchorsAvailable && r.Room == RoomName) Show(r, null, r.Position, r.Rotation, 0f); // desktop: the stored pose
+                if (r.Room == PocketArena.RoomKey)
+                {
+                    if (PlayArea.IsPocket) Show(r, null, PocketArena.ToWorld(r.Position), PocketArena.ToWorld(r.Rotation), 0f);
+                }
+                else if (!PlayArea.IsDesktop && Guid.TryParse(r.Uuid, out Guid id)) uuids.Add(id);
+                else if (PlayArea.IsDesktop && r.Room == RoomName) Show(r, null, r.Position, r.Rotation, 0f); // the stored pose
             }
             if (uuids.Count == 0) return;
 
@@ -125,8 +132,19 @@ namespace Ricochet.Gameplay
                 if (record == null) continue;
                 var shown = Show(record, null, Vector3.zero, Quaternion.identity, 0f);
                 shown.Anchor = shown.Root.gameObject.AddComponent<OVRSpatialAnchor>();
-                unbound.BindTo(shown.Anchor); // the anchor now drives the crown's pose
-                bound++;
+                try
+                {
+                    unbound.BindTo(shown.Anchor); // the anchor now drives the crown's pose
+                    bound++;
+                }
+                catch (InvalidOperationException e)
+                {
+                    // Already bound: in the Editor (no domain reload) OVRSpatialAnchor's static registry can outlive
+                    // the previous Play session. Drop this copy rather than show an unanchored crown.
+                    Debug.LogWarning($"[Ricochet] Trophy anchor {unbound.Uuid} not bound: {e.Message}");
+                    _shown.Remove(shown);
+                    Destroy(shown.Root.gameObject);
+                }
             }
             Debug.Log($"[Ricochet] Trophies restored: {bound}/{uuids.Count} anchored crowns");
         }
@@ -145,9 +163,15 @@ namespace Ricochet.Gameplay
             };
             _shelf.Items.Add(record);
             var shown = Show(record, null, record.Position, record.Rotation, 0f);
-            if (_fx != null) { _fx.Burst(record.Position, _gold, 1.6f); _fx.Burst(record.Position, Color.white); }
-            if (_glow != null) _glow.Pulse(record.Position, _gold * 2f, 1.4f, 1.2f);
-            if (_sfx != null) _sfx.PlayChord(record.Position);
+            if (PlayArea.IsPocket)
+            {
+                record.Room = PocketArena.RoomKey;
+                record.Position = PocketArena.ToLocal(record.Position);
+                record.Rotation = PocketArena.ToLocal(record.Rotation);
+            }
+            if (_fx != null) { _fx.Burst(shown.Root.position, _gold, 1.6f); _fx.Burst(shown.Root.position, Color.white); }
+            if (_glow != null) _glow.Pulse(shown.Root.position, _gold * 2f, 1.4f, 1.2f);
+            if (_sfx != null) _sfx.PlayChord(shown.Root.position);
 
             while (_shelf.Items.Count > _max) await Retire(_shelf.Items[0]);
 

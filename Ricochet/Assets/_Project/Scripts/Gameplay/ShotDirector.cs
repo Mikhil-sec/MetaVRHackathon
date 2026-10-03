@@ -197,7 +197,7 @@ namespace Ricochet.Gameplay
         /// <summary>The relaxed straight-ahead shot a first-time player makes; the board guarantees it a cluster.</summary>
         public BoardGenerator.HeroShot HeroShot(Pose seat) => new()
         {
-            Origin = SlingPosition(seat),
+            Origin = _sling.LaunchPoint(SlingPosition(seat), HeroDirection(seat), HeroPull),
             Velocity = _sling.VelocityFor(HeroDirection(seat), HeroPull),
             Spark = _spark,
         };

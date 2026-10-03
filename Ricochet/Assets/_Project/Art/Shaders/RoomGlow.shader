@@ -35,6 +35,14 @@ Shader "Ricochet/RoomGlow"
             float4 _GlowWave;               // xyz = origin, w = current radius (m): a light front sweeping the room
             float4 _GlowWaveColor;          // rgb = color * intensity (0 when idle), a = front width (m)
 
+            // Pocket Arena (Ricochet.Room.PocketArena): the room is a virtual glass chamber, so it needs its own look.
+            #define MAX_ARENA_BOXES 4
+            float4x4 _ArenaWorldToLocal;            // world -> the seat's floor frame (x right, y up, z forward)
+            float4 _ArenaBoxC[MAX_ARENA_BOXES];     // box centres in that frame: [0] the chamber, then its furniture
+            float4 _ArenaBoxH[MAX_ARENA_BOXES];     // box half extents
+            float4 _ArenaParams;                    // x = box count, y/z = reveal start/end (forward m), w = 1 when live
+            float4 _ArenaColor;                     // rgb = seam color * intensity
+
             CBUFFER_START(UnityPerMaterial)
                 float _Unused; // SRP Batcher needs a per-material buffer
             CBUFFER_END
@@ -93,8 +101,50 @@ Shader "Ricochet/RoomGlow"
                 glow += _GlowWaveColor.rgb * (front * shimmer + after);
 
                 float shade = 0.65 + 0.35 * saturate(dot(n, normalize(float3(0.3, 0.8, 0.5))));
-                half3 baseRgb = _RoomBaseColor.rgb * shade * _RoomBaseColor.a;
-                return half4(baseRgb + glow, _RoomBaseColor.a);
+                half alpha = _RoomBaseColor.a;
+                half3 baseRgb = _RoomBaseColor.rgb * shade * alpha;
+
+                // Derivatives outside the (uniform) branch, so every compiler accepts them.
+                float3 p = mul(_ArenaWorldToLocal, float4(i.positionWS, 1.0)).xyz;
+                float px = max(fwidth(p.x), max(fwidth(p.y), fwidth(p.z))) + 1e-5; // one pixel, in metres
+                UNITY_BRANCH
+                if (_ArenaParams.w > 0.5)
+                {
+                    float3 nl = abs(mul((float3x3)_ArenaWorldToLocal, n));
+                    // Fades in with distance ahead of the eye: a stage in front of you, not a box around you.
+                    float reveal = smoothstep(_ArenaParams.y, _ArenaParams.z, p.z);
+
+                    // Seams: on a box face, the distance to the second-nearest face plane is the distance to an edge.
+                    float seam = 0.0;
+                    [unroll]
+                    for (int b = 0; b < MAX_ARENA_BOXES; b++)
+                    {
+                        float3 d = _ArenaBoxH[b].xyz - abs(p - _ArenaBoxC[b].xyz);
+                        float lo = min(d.x, min(d.y, d.z));
+                        float hi = max(d.x, max(d.y, d.z));
+                        float edge = d.x + d.y + d.z - lo - hi;
+                        float onBox = step(abs(lo), 0.015) * step((float)b, _ArenaParams.x - 0.5);
+                        float core = 1.0 - smoothstep(0.004, 0.004 + px * 1.5, edge);
+                        float halo = exp(-edge / 0.05) * 0.3;
+                        seam = max(seam, onBox * (core + halo));
+                    }
+                    // A slow shimmer travelling along the frame.
+                    float shimmer = 1.0 + 0.7 * pow(saturate(sin(dot(p, float3(1.3, 0.9, 1.7)) * 2.0 - _Time.y * 1.4)), 8.0);
+
+                    // A fine grid in the surface plane, faded out where it would alias. The ceiling keeps only a
+                    // trace: overhead it crowds the view and frames nothing the player aims at.
+                    float3 g = abs(frac(p * 2.0 + 0.5) - 0.5) * 0.5; // m to the nearest 50 cm line, per axis
+                    float3 lines = (1.0 - smoothstep(0.0012, 0.0012 + px * 1.5, g)) * (1.0 - nl);
+                    float grid = max(lines.x, max(lines.y, lines.z)) * saturate(1.0 - px * 40.0);
+                    grid *= lerp(1.0, 0.2, saturate(-n.y * 2.0 - 1.0));
+
+                    // Our light catches the glass: seams flare and the grid lights up near the Spark and pulses.
+                    half3 arena = (_ArenaColor.rgb + glow * 1.5) * (seam * shimmer) + (_ArenaColor.rgb * 0.08 + glow * 0.8) * grid;
+                    glow = glow * lerp(0.4, 1.0, reveal) + arena * reveal;
+                    baseRgb *= reveal;
+                    alpha *= reveal;
+                }
+                return half4(baseRgb + glow, alpha);
             }
             ENDHLSL
         }

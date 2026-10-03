@@ -120,6 +120,14 @@ namespace Ricochet.Dev
             return "resume in editor " + on;
         }
 
+        /// <summary>Editor Play starts in the Pocket Arena (the no-scan fallback) when on. Takes effect on the next Play.</summary>
+        public static string Pocket(bool on)
+        {
+            PlayerPrefs.SetInt(Room.PlayArea.ForcePocketKey, on ? 1 : 0);
+            PlayerPrefs.Save();
+            return "pocket arena " + on;
+        }
+
         /// <summary>
         /// Run: make the current creature one hit from death and count it as encounter (n - 1), so the next hit wins
         /// it and the run moves on to encounter n (0-based; 5 is the boss).

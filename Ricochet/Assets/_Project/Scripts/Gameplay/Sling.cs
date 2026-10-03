@@ -193,6 +193,14 @@ namespace Ricochet.Gameplay
         Vector3 LaunchVelocity() =>
             VelocityFor(_smoothedPull, Mathf.InverseLerp(_minPull, _maxPull, _smoothedPull.magnitude));
 
+        /// <summary>
+        /// Where a release at this aim and pull depth starts: the Spark sits pulled back behind the anchor, so a
+        /// hand-fired shot travels that much further (and drops that much more) than one launched from the anchor.
+        /// Predictions, tests and the sweep launch from here so boards are built for the shot a hand makes.
+        /// </summary>
+        public Vector3 LaunchPoint(Vector3 anchor, Vector3 aimDirection, float pull01) =>
+            anchor - aimDirection.normalized * Mathf.Lerp(_minPull, _maxPull, Mathf.Clamp01(pull01));
+
         /// <summary>Launch velocity for an aim direction and a pull depth in [0, 1].</summary>
         public Vector3 VelocityFor(Vector3 aimDirection, float pull01) =>
             aimDirection.normalized * Mathf.Lerp(_minSpeed, _maxSpeed, Mathf.Clamp01(pull01));
@@ -202,7 +210,7 @@ namespace Ricochet.Gameplay
         {
             if (_state != State.Ready) return false;
             _smoothedPull = aimDirection.normalized * Mathf.Lerp(_minPull, _maxPull, Mathf.Clamp01(pull01));
-            _spark.Hold(transform.position);
+            _spark.Hold(transform.position - _smoothedPull); // where a hand release starts
             Fire(LaunchVelocity());
             return true;
         }

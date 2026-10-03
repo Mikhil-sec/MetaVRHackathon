@@ -3,20 +3,31 @@ using System.Collections;
 using Meta.XR.MRUtilityKit;
 using UnityEngine;
 using UnityEngine.XR;
+#if UNITY_ANDROID && !UNITY_EDITOR
+using UnityEngine.Android;
+#endif
 
 namespace Ricochet.Room
 {
     /// <summary>
-    /// Owns the player's seat pose and the loaded room.
-    /// On device the seat is wherever the head settles once the room has loaded and head tracking is live
-    /// (MRUK can load the room before the first tracked frame, when the head still sits at the origin).
-    /// On desktop (no XR) it picks a seat inside the room, facing the most open direction, and moves the rig there.
+    /// Owns the player's seat pose and the loaded room, and decides where the room comes from (MRUK's own
+    /// load-on-startup is off):
+    /// - Desktop (no XR): one of MRUK's room prefabs; the seat is chosen inside it, facing the most open direction,
+    ///   and the rig moves there.
+    /// - Device: the scanned scene model. With no scan, Space Setup is offered once (remembered); if there is still no
+    ///   room, or scene permission is denied, the game plays in the Pocket Arena (CONCEPT section 5), never in a
+    ///   made-up prefab room that would put invisible walls in the real one.
+    /// On device the seat is wherever the head settles once head tracking is live (MRUK can load the room before the
+    /// first tracked frame, when the head still sits at the origin).
     /// </summary>
     public sealed class PlayArea : MonoBehaviour
     {
-        const float SeatedEyeHeight = 1.15f;
+        public const float SeatedEyeHeight = 1.15f;
         const float SettleSeconds = 0.4f;
         const float SettleTolerance = 0.02f;
+        const string SpaceSetupOfferedKey = "ricochet.spaceSetupOffered";
+        /// <summary>Editor only: PlayerPrefs flag that starts Play in the Pocket Arena (DevHooks.Pocket).</summary>
+        public const string ForcePocketKey = "ricochet.forcePocket";
 
         [SerializeField] Transform _rigRoot;
         [SerializeField] Transform _head;
@@ -25,6 +36,7 @@ namespace Ricochet.Room
         public Pose Seat { get; private set; }
         public bool IsReady { get; private set; }
         public static bool IsDesktop => !XRSettings.isDeviceActive;
+        public static bool IsPocket => PocketArena.Active;
 
         public event Action Ready;
 
@@ -33,6 +45,80 @@ namespace Ricochet.Room
         void Start()
         {
             MRUK.Instance.RegisterSceneLoadedCallback(OnSceneLoaded);
+            StartCoroutine(LoadRoom());
+        }
+
+        void OnDestroy() => PocketArena.Deactivate();
+
+        IEnumerator LoadRoom()
+        {
+            var mruk = MRUK.Instance;
+#if UNITY_EDITOR
+            if (PlayerPrefs.GetInt(ForcePocketKey, 0) == 1)
+            {
+                yield return LoadPocketArena("forced (DevHooks.Pocket)");
+                yield break;
+            }
+#endif
+            if (IsDesktop)
+            {
+                var prefabs = mruk.SceneSettings.RoomPrefabs;
+                int index = mruk.SceneSettings.RoomIndex;
+                if (index < 0 || index >= prefabs.Length) index = UnityEngine.Random.Range(0, prefabs.Length);
+                _ = mruk.LoadSceneFromPrefab(prefabs[index]); // OnSceneLoaded takes it from here
+                yield break;
+            }
+
+#if UNITY_ANDROID && !UNITY_EDITOR
+            bool? granted = null;
+            yield return RequestScenePermission(result => granted = result);
+            if (granted != true)
+            {
+                yield return LoadPocketArena("scene permission denied");
+                yield break;
+            }
+#endif
+            bool offer = PlayerPrefs.GetInt(SpaceSetupOfferedKey, 0) == 0;
+            var load = mruk.LoadSceneFromDevice(requestSceneCaptureIfNoDataFound: offer);
+            while (!load.IsCompleted) yield return null;
+            var result = load.IsCompletedSuccessfully ? load.Result : MRUK.LoadDeviceResult.Failure;
+            if (result == MRUK.LoadDeviceResult.Success && mruk.GetCurrentRoom() != null) yield break; // OnSceneLoaded
+
+            if (offer)
+            {
+                PlayerPrefs.SetInt(SpaceSetupOfferedKey, 1); // offered and declined: don't nag on every launch
+                PlayerPrefs.Save();
+            }
+            yield return LoadPocketArena($"no scene model ({result})");
+        }
+
+        /// <summary>
+        /// Builds the Pocket Arena around the settled seat and loads it as the room. MRUK world lock stays off: a
+        /// synthetic room has no tracked anchors to lock to, and the arena should sit exactly where it was built.
+        /// </summary>
+        IEnumerator LoadPocketArena(string reason)
+        {
+            var mruk = MRUK.Instance;
+            mruk.EnableWorldLock = false;
+            Pose eye;
+            if (IsDesktop)
+            {
+                // The rig's fallback head height lands a frame or two after Start, and PlaceDesktopSeat offsets the
+                // rig by it (a prefab room takes that long to load anyway; the arena is instant).
+                for (int f = 0; f < 10 && _head.localPosition.y < 0.5f; f++) yield return null;
+                eye = new Pose(new Vector3(0f, SeatedEyeHeight, 0f), Quaternion.identity);
+            }
+            else
+            {
+                yield return WaitForSettledHead();
+                eye = new Pose(_head.position, _head.rotation);
+            }
+            float floorY = _rigRoot != null ? _rigRoot.position.y : 0f; // floor-level tracking origin
+            Debug.Log($"[Ricochet] Pocket Arena: {reason}");
+            var layout = PocketArena.BuildLayout(eye, floorY);
+            var load = mruk.LoadSceneFromPrefab(layout); // fires OnSceneLoaded
+            while (!load.IsCompleted) yield return null;
+            Destroy(layout);
         }
 
         void OnSceneLoaded()
@@ -43,6 +129,10 @@ namespace Ricochet.Room
                 if (Room != null) PlaceDesktopSeat();
                 TakeSeat();
             }
+            else if (IsPocket)
+            {
+                TakeSeat(); // the head already settled before the arena was built around it
+            }
             else
             {
                 StartCoroutine(SeatWhenTracked());
@@ -50,6 +140,12 @@ namespace Ricochet.Room
         }
 
         IEnumerator SeatWhenTracked()
+        {
+            yield return WaitForSettledHead();
+            TakeSeat();
+        }
+
+        IEnumerator WaitForSettledHead()
         {
             float settled = 0f;
             Vector3 last = _head.localPosition;
@@ -61,8 +157,34 @@ namespace Ricochet.Room
                 settled = tracked && (now - last).sqrMagnitude < SettleTolerance * SettleTolerance ? settled + Time.deltaTime : 0f;
                 last = now;
             }
-            TakeSeat();
         }
+
+#if UNITY_ANDROID && !UNITY_EDITOR
+        /// <summary>
+        /// Asks for the scene permission. A request made while another permission dialog is open fails silently,
+        /// so it polls the grant and asks again every few seconds until it gets an answer.
+        /// </summary>
+        IEnumerator RequestScenePermission(Action<bool> done)
+        {
+            string permission = OVRPermissionsRequester.ScenePermission;
+            int answer = Permission.HasUserAuthorizedPermission(permission) ? 1 : 0;
+            var callbacks = new PermissionCallbacks();
+            callbacks.PermissionGranted += _ => answer = 1;
+            callbacks.PermissionDenied += _ => answer = -1;
+            float nextAsk = 0f;
+            while (answer == 0)
+            {
+                if (Time.realtimeSinceStartup >= nextAsk)
+                {
+                    Permission.RequestUserPermission(permission, callbacks);
+                    nextAsk = Time.realtimeSinceStartup + 5f;
+                }
+                yield return null;
+                if (Permission.HasUserAuthorizedPermission(permission)) answer = 1;
+            }
+            done(answer == 1);
+        }
+#endif
 
         void TakeSeat()
         {
@@ -82,9 +204,11 @@ namespace Ricochet.Room
         /// <summary>
         /// A plausible seated eye pose for rooms without a real player (desktop, room sweep): a free floor point
         /// with the most open space ahead, facing that way. Deterministic for a given room and seed.
+        /// The Pocket Arena has its seat built in.
         /// </summary>
         public static Pose ChooseSeat(MRUKRoom room, int seed)
         {
+            if (PocketArena.Active) return PocketArena.Seat;
             var saved = UnityEngine.Random.state;
             UnityEngine.Random.InitState(seed);
             float floorY = room.FloorAnchor != null ? room.FloorAnchor.transform.position.y : 0f;

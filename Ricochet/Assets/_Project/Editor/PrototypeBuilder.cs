@@ -232,6 +232,8 @@ namespace Ricochet.EditorTools
         {
             var mruk = Object.FindAnyObjectByType<MRUK>();
             mruk.SceneSettings.DataSource = MRUK.SceneDataSource.DeviceWithPrefabFallback;
+            // PlayArea drives loading: device scene, else the Pocket Arena (never a prefab room on device).
+            mruk.SceneSettings.LoadSceneOnStartup = false;
             EditorUtility.SetDirty(mruk);
 
             // The room mesh renders RoomGlow: invisible over passthrough except for our light, and depth for occlusion.
@@ -249,7 +251,7 @@ namespace Ricochet.EditorTools
                 MRUKAnchor.SceneLabels.PLANT | MRUKAnchor.SceneLabels.WALL_ART | MRUKAnchor.SceneLabels.OTHER |
                 MRUKAnchor.SceneLabels.DOOR_FRAME | MRUKAnchor.SceneLabels.WINDOW_FRAME;
             EditorUtility.SetDirty(effectMesh);
-            log.AppendLine("MRUK: DeviceWithPrefabFallback; EffectMesh: RoomGlow mesh + colliders on layer Room");
+            log.AppendLine("MRUK: loaded by PlayArea (prefab on desktop, device or Pocket Arena); EffectMesh: RoomGlow mesh + colliders on layer Room");
         }
 
         /// <summary>Seated game: no locomotion, and no Building Block demo UI.</summary>

@@ -29,6 +29,7 @@ namespace Ricochet.Gameplay
         [SerializeField] float _formationSpacing = 0.18f;
         [SerializeField] float _minSpacing = 0.15f;
         [SerializeField] int _heroMinCrystals = 6;     // the first straight shot's cluster, center included
+        [SerializeField] int _reboundCrystals = 5;     // where the straight shot goes next, off the hero cluster
         static readonly float[] HeroTightening = { 1f, 0.8f, 0.68f }; // small landing surfaces pack the grid closer
         float _tight = 1f;
         int _rejSurface, _rejAnchor, _rejNear, _rejVolume, _rejSight; // hero grid diagnostics (board generation only)
@@ -120,6 +121,7 @@ namespace Ricochet.Gameplay
                 float pitch = Vector3.Angle(Vector3.ProjectOnPlane(HeroVelocity, Vector3.up), HeroVelocity);
                 HeroInfo = $"{heroAnchor.Label} d={(heroPos - seat.position).magnitude:F1} pitch={pitch:F0} n={_active.Count}{(centerBlocked ? " centerInVolume" : "")}" +
                            (_active.Count < _heroMinCrystals ? $" rej surf/anchor/near/vol/sight={_rejSurface}/{_rejAnchor}/{_rejNear}/{_rejVolume}/{_rejSight}" : "");
+                HeroInfo += " rebound=" + PlaceRebound(hero);
             }
 
             for (int guard = 0; _active.Count < formationTarget && guard < _attempts; guard++)
@@ -216,20 +218,64 @@ namespace Ricochet.Gameplay
                 why?.Append($" {collider.name}");
                 return false;
             }
-            // The physics contact can be speculative (reported up to one step, ~14 cm, before the Spark touches),
-            // and on an edge its normal points at no face. Follow the flight on to where it meets the collider it
-            // touched (the surface the Spark really hits, which can sit a few cm off MRUK's analytic face), so the
-            // cluster stays on the shot's line in front of that surface, with the surface's own normal.
-            Vector3 v = hero.Spark.PredictedVelocity.normalized;
+            RefineContact(hero.Spark, collider, anchor, ref point, ref n);
+            pos = point;
+            normal = n;
+            return true;
+        }
+
+        /// <summary>
+        /// The physics contact can be speculative (reported up to one step, ~14 cm, before the Spark touches), and on
+        /// an edge its normal points at no face. Follow the flight on to where it meets the collider it touched (the
+        /// surface the Spark really hits, which can sit a few cm off MRUK's analytic face), so a cluster stays on the
+        /// shot's line in front of that surface, with the surface's own normal.
+        /// </summary>
+        static void RefineContact(Spark spark, Collider collider, MRUKAnchor anchor, ref Vector3 point, ref Vector3 n)
+        {
+            Vector3 v = spark.PredictedVelocity.normalized;
             if (collider.Raycast(new Ray(point - v * 0.3f, v), out RaycastHit surf, 0.8f))
             {
                 point = surf.point;
                 n = surf.normal;
             }
             else n = FaceNormal(anchor, n);
-            pos = point;
-            normal = n;
-            return true;
+        }
+
+        /// <summary>
+        /// The first shot should chain (CONCEPT section 4: a straight shot hits 6+). Bouncing straight back off the
+        /// hero cluster, the Spark used to find nothing more. Follow the hero shot on with the hero crystals in
+        /// place (it really bounces off them, as in play) to its next room contact, and seed a small cluster
+        /// centred on that path when it lands in view and clear of the sling. Returns a diagnostic.
+        /// </summary>
+        string PlaceRebound(HeroShot hero)
+        {
+            if (_reboundCrystals <= 0 || hero.Spark == null) return "off";
+            Physics.SyncTransforms();
+            // Off the centre crystal, the next room contact is the rebound. If the flight slips past the crystals
+            // and touches the wall inside the hero cluster instead, the rebound is the contact after that.
+            if (!hero.Spark.PredictFirstContact(hero.Origin, HeroVelocity, out Vector3 point, out Vector3 n,
+                    out Collider collider))
+                return "none";
+            if (HeroPoint.HasValue && (point - HeroPoint.Value).sqrMagnitude < 0.3f * 0.3f &&
+                !hero.Spark.PredictFirstContact(hero.Origin, HeroVelocity, out point, out n, out collider, 3f, 1))
+                return "none2";
+            var anchor = collider.GetComponentInParent<MRUKAnchor>();
+            if (anchor == null || !SpawnFilter.PassesFilter(anchor.Label)) return collider.name;
+            RefineContact(hero.Spark, collider, anchor, ref point, ref n);
+            float d = (point - _seat.position).magnitude;
+            if (d < _minDistance) return $"near d={d:F1}";
+            if (!InForwardView(point, false)) return "outOfView";
+            Vector3 center = point + n * _surfaceOffset;
+            if (_room.IsPositionInSceneVolume(center) || Excluded(center)) return "blocked";
+            foreach (var c in _active)
+                if ((c.transform.position - center).sqrMagnitude < _minSpacing * _minSpacing) return "inCluster";
+
+            int start = _active.Count;
+            Spawn(center, n);
+            _tight = 0.8f;
+            PlaceFormation(point, n, anchor, _reboundCrystals, false);
+            _tight = 1f;
+            return $"{anchor.Label} d={d:F1} n={_active.Count - start}";
         }
 
         /// <summary>A plane's normal (its forward), or the volume face whose normal is nearest n, signed toward n.</summary>

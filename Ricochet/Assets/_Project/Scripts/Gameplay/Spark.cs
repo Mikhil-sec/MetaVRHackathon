@@ -257,10 +257,12 @@ namespace Ricochet.Gameplay
         /// <summary>
         /// Where would this launch first touch the room? Runs the real Spark physics for a moment (script-mode
         /// simulation, no events), so board generation can put the hero cluster exactly where the Spark lands.
-        /// Call only between shots, with no crystals active.
+        /// Call only between shots. Active crystals deflect the flight as in play; contacts with them don't count.
+        /// skipRoomContacts > 0 predicts a later landing (the hero's rebound): that many room contacts are bounced
+        /// off first, and a floor among them ends the prediction (the floor ends the shot).
         /// </summary>
         public bool PredictFirstContact(Vector3 origin, Vector3 velocity, out Vector3 point, out Vector3 normal,
-                                        out Collider collider, float maxTime = 3f)
+                                        out Collider collider, float maxTime = 3f, int skipRoomContacts = 0)
         {
             bool wasActive = gameObject.activeSelf;
             gameObject.SetActive(true);
@@ -269,17 +271,24 @@ namespace Ricochet.Gameplay
 
             _predicting = true;
             _predictedCollider = null;
+            _predictSkip = skipRoomContacts;
+            _predictEnded = false;
             Hold(origin);
             Physics.SyncTransforms();
             Launch(velocity);
             float dt = TimeWarp.PhysicsStep;
-            for (float t = 0f; t < maxTime && _predictedCollider == null; t += dt)
+            for (float t = 0f; t < maxTime && _predictedCollider == null && !_predictEnded; t += dt)
             {
                 _body.AddForce(Physics.gravity * _gravityScale, ForceMode.Acceleration);
                 PredictedVelocity = _body.linearVelocity; // the approach velocity, kept from the step that touches
                 Physics.Simulate(dt);
             }
+            // Put the body itself back and settle one step while still predicting: the simulated flight's last
+            // contact (often the floor) would otherwise reach the real shot's first step and end it on the spot.
             Hold(origin);
+            _body.position = origin;
+            Physics.SyncTransforms();
+            Physics.Simulate(dt);
             _predicting = false;
 
             Physics.simulationMode = mode;
@@ -291,6 +300,8 @@ namespace Ricochet.Gameplay
         }
 
         bool _predicting;
+        int _predictSkip;
+        bool _predictEnded;
 
         /// <summary>The flight velocity just before the predicted first contact (PredictFirstContact).</summary>
         public Vector3 PredictedVelocity { get; private set; }
@@ -304,6 +315,13 @@ namespace Ricochet.Gameplay
             {
                 if (_predictedCollider == null && !collision.collider.TryGetComponent(out Crystal _))
                 {
+                    if (_predictSkip > 0)
+                    {
+                        _predictSkip--;
+                        var bounced = collision.collider.GetComponentInParent<MRUKAnchor>();
+                        if (_floorEndsShot && bounced != null && bounced.Label == MRUKAnchor.SceneLabels.FLOOR) _predictEnded = true;
+                        return;
+                    }
                     var c = collision.GetContact(0);
                     _predictedCollider = collision.collider;
                     _predictedPoint = c.point;

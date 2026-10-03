@@ -6,6 +6,7 @@ namespace Ricochet.Room
     /// On desktop there is no passthrough, so the room mesh (RoomGlow, transparent on device) would leave an
     /// empty void. This gives it an opaque base color so the room is visible while testing in the Editor.
     /// The base stays clear until the play area is ready, the first point where the XR state is certain.
+    /// On device the Pocket Arena (no scan) gets a faint glass tint instead: its walls are virtual.
     /// </summary>
     public sealed class DesktopRoomPreview : MonoBehaviour
     {
@@ -21,7 +22,8 @@ namespace Ricochet.Room
 
         void OnDisable() => _playArea.Ready -= OnReady;
 
-        void OnReady() => Shader.SetGlobalColor(RoomBaseColorId, PlayArea.IsDesktop ? _previewColor : Color.clear);
+        void OnReady() => Shader.SetGlobalColor(RoomBaseColorId,
+            PlayArea.IsDesktop ? _previewColor : PlayArea.IsPocket ? PocketArena.GlassColor : Color.clear);
 
         void OnDestroy() => Shader.SetGlobalColor(RoomBaseColorId, Color.clear);
     }
