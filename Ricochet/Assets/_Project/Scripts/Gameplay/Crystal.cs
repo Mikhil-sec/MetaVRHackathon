@@ -32,6 +32,8 @@ namespace Ricochet.Gameplay
         const float LitGlow = 0.7f;
 
         [SerializeField] Renderer _renderer;
+        [SerializeField] MeshFilter _filter;
+        [SerializeField] Mesh[] _kindMeshes;      // by CrystalKind: each type has its own silhouette (reads without color)
         [SerializeField] Color _idleColor = new(0.55f, 0.35f, 1f);
         [SerializeField] Color _litColor = new(1f, 0.8f, 0.35f);
 
@@ -84,6 +86,15 @@ namespace Ricochet.Gameplay
             Kind = kind;
             _block.SetColor(BaseColorId, IdleColor);
             _block.SetFloat(KindId, (float)kind);
+            SetShape(kind);
+        }
+
+        // Visual only: the collider is the same sphere for every kind.
+        void SetShape(CrystalKind kind)
+        {
+            int i = (int)kind;
+            if (_filter != null && _kindMeshes != null && i < _kindMeshes.Length && _kindMeshes[i] != null)
+                _filter.sharedMesh = _kindMeshes[i];
         }
 
         Color IdleColor => Kind switch
@@ -111,7 +122,8 @@ namespace Ricochet.Gameplay
             IsCorrupt = true;
             _punch = 1f;
             _block.SetColor(BaseColorId, _corruptColor);
-            _block.SetFloat(KindId, 0f); // a hex swallows the crystal's type
+            _block.SetFloat(KindId, 0f); // a hex swallows the crystal's type, shape included
+            SetShape(CrystalKind.Normal);
         }
 
         public void Light()
@@ -149,7 +161,15 @@ namespace Ricochet.Gameplay
                 : 0f;
 
             // Specials render a touch larger so they read from the seat (visual only: the collider is unchanged).
-            float kindScale = Kind == CrystalKind.Normal || IsCorrupt ? 1f : 1.2f;
+            // Per shape: the gem, bar and mine are bulkier than the slim spike, so they need less of a boost.
+            float kindScale = IsCorrupt ? 1f : Kind switch
+            {
+                CrystalKind.Gold => 1.05f,
+                CrystalKind.Prism => 0.95f,
+                CrystalKind.Bomb => 1.05f,
+                CrystalKind.Amp => 1.15f,
+                _ => 1f,
+            };
             float scale = OutBack(_appear) * (1f + 0.45f * Mathf.Sin(_punch * Mathf.PI) * _punch) * (1f + 0.25f * beat) * kindScale;
             // Idle crystals shimmer faintly; lit ones flash white-hot, then burn steady.
             float glow = IsLit

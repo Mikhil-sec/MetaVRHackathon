@@ -5,7 +5,11 @@ namespace Ricochet.Gameplay
     /// <summary>Procedural meshes for the encounter: the rift's crack and the creature's faceted body.</summary>
     public static class EncounterMeshes
     {
-        static Mesh s_rift, s_creature;
+        static Mesh s_rift;
+        static readonly Mesh[] s_bodies = new Mesh[5];
+
+        /// <summary>A creature's silhouette: one faceted body per kind, cached.</summary>
+        public enum BodyShape { Teardrop, Hood, Squat, Spindle, Bell }
 
         /// <summary>
         /// A jagged vertical crack, 1 unit tall, about 1 unit wide at its widest: a zigzag seam with a lens-shaped
@@ -52,9 +56,12 @@ namespace Ricochet.Gameplay
         /// A faceted teardrop, about 1 unit tall: a once-subdivided icosahedron pulled into a point at the top,
         /// flat-shaded (split vertices) so the rim light catches the facets.
         /// </summary>
-        public static Mesh Creature()
+        public static Mesh Creature() => Creature(BodyShape.Teardrop);
+
+        public static Mesh Creature(BodyShape shape)
         {
-            if (s_creature != null) return s_creature;
+            int key = (int)shape;
+            if (s_bodies[key] != null) return s_bodies[key];
             float p = (1f + Mathf.Sqrt(5f)) / 2f;
             var ico = new[]
             {
@@ -71,10 +78,11 @@ namespace Ricochet.Gameplay
             int v = 0;
             for (int f = 0; f < faces.Length; f += 3)
             {
-                Vector3 a = Shape(ico[faces[f]]), b = Shape(ico[faces[f + 1]]), c = Shape(ico[faces[f + 2]]);
-                Vector3 ab = Shape((ico[faces[f]] + ico[faces[f + 1]]) * 0.5f);
-                Vector3 bc = Shape((ico[faces[f + 1]] + ico[faces[f + 2]]) * 0.5f);
-                Vector3 ca = Shape((ico[faces[f + 2]] + ico[faces[f]]) * 0.5f);
+                Vector3 a = Shape(ico[faces[f]], shape, true), b = Shape(ico[faces[f + 1]], shape, true);
+                Vector3 c = Shape(ico[faces[f + 2]], shape, true);
+                Vector3 ab = Shape((ico[faces[f]] + ico[faces[f + 1]]) * 0.5f, shape, false);
+                Vector3 bc = Shape((ico[faces[f + 1]] + ico[faces[f + 2]]) * 0.5f, shape, false);
+                Vector3 ca = Shape((ico[faces[f + 2]] + ico[faces[f]]) * 0.5f, shape, false);
                 Vector3[] sub = { a, ab, ca, ab, b, bc, ca, bc, c, ab, bc, ca };
                 for (int i = 0; i < sub.Length; i += 3)
                 {
@@ -86,10 +94,11 @@ namespace Ricochet.Gameplay
             }
             var tris = new int[verts.Length];
             for (int i = 0; i < tris.Length; i++) tris[i] = i;
-            s_creature = new Mesh { name = "Creature", vertices = verts, triangles = tris };
-            s_creature.RecalculateNormals();
-            s_creature.RecalculateBounds();
-            return s_creature;
+            var mesh = new Mesh { name = shape == BodyShape.Teardrop ? "Creature" : "Creature" + shape, vertices = verts, triangles = tris };
+            mesh.RecalculateNormals();
+            mesh.RecalculateBounds();
+            s_bodies[key] = mesh;
+            return mesh;
         }
 
         static readonly System.Collections.Generic.Dictionary<int, Mesh> s_tendrils = new();
@@ -151,12 +160,53 @@ namespace Ricochet.Gameplay
         }
 
         // Unit sphere, then a teardrop: narrower and pulled up toward the crown, a little flattened front to back.
-        static Vector3 Shape(Vector3 p)
+        /// <summary>
+        /// A point on the body's surface in the direction <paramref name="dir"/> (body-local, ~1 tall): where an eye or
+        /// a mouth sits, whatever the silhouette.
+        /// </summary>
+        public static Vector3 SurfacePoint(Vector3 dir, BodyShape shape) => Shape(dir, shape, false);
+
+        // The unit sphere bent into each silhouette. `corner` marks the icosahedron's own vertices (the Spindle grows
+        // its spines there; the facets in between stay smooth).
+        static Vector3 Shape(Vector3 p, BodyShape shape, bool corner)
         {
             p = p.normalized * 0.5f;
-            float up = Mathf.Clamp01(p.y / 0.5f);
-            float taper = 1f - 0.55f * up * up;
-            return new Vector3(p.x * taper, p.y * (1f + 0.45f * up), p.z * taper * 0.85f);
+            float up = Mathf.Clamp01(p.y / 0.5f), down = Mathf.Clamp01(-p.y / 0.5f);
+            switch (shape)
+            {
+                case BodyShape.Hood:
+                {
+                    // Tall and slim; the crown leans toward the viewer like a hood.
+                    float taper = 1f - 0.7f * up * up;
+                    return new Vector3(p.x * taper * 0.82f, p.y * (1.15f + 0.5f * up), p.z * taper * 0.8f + 0.13f * up * up);
+                }
+                case BodyShape.Squat:
+                {
+                    // Wide and low, the lower front pushed out into a jaw.
+                    float taper = 1f - 0.45f * up * up;
+                    float jaw = p.z > 0f ? 0.12f * down * (p.z / 0.5f) : 0f;
+                    return new Vector3(p.x * taper * 1.3f, p.y * 0.78f, p.z * taper + jaw);
+                }
+                case BodyShape.Spindle:
+                {
+                    // A narrow diamond with spines at the corners (behind the face, which stays clear).
+                    float waist = 1f - 0.72f * Mathf.Pow(Mathf.Abs(p.y) / 0.5f, 1.3f);
+                    float spine = corner && p.z < 0.3f ? 1.5f : 1f;
+                    return new Vector3(p.x * waist * 0.9f * spine, p.y * 1.3f * (corner ? 1.15f : 1f), p.z * waist * 0.8f * spine);
+                }
+                case BodyShape.Bell:
+                {
+                    // A domed crown over a flared, flat-lipped skirt: armour.
+                    float dome = 1f - 0.2f * up * up;
+                    float flare = 1f + 0.42f * down * down;
+                    return new Vector3(p.x * dome * flare * 1.12f, p.y * (p.y > 0f ? 1.1f : 0.7f), p.z * dome * flare * 0.95f);
+                }
+                default:
+                {
+                    float taper = 1f - 0.55f * up * up;
+                    return new Vector3(p.x * taper, p.y * (1f + 0.45f * up), p.z * taper * 0.85f);
+                }
+            }
         }
     }
 }

@@ -1,4 +1,5 @@
 using Ricochet.Audio;
+using Ricochet.Input;
 using Ricochet.Room;
 using UnityEngine;
 
@@ -7,7 +8,7 @@ namespace Ricochet.Gameplay
     /// <summary>
     /// Focus (CONCEPT section 3): glance at a crystal while aiming to mark it; if the Spark hits the focused crystal
     /// it is a critical (its chain value doubles, stacking with Gold). Head gaze is the default and must be fully
-    /// playable (TECH_GUIDE section 6); an eye-gaze source can replace it through <see cref="GazeRay"/>.
+    /// playable (TECH_GUIDE section 6); eye gaze takes over where the device has it (<see cref="EyeGaze"/>).
     /// A short dwell keeps a glance across the board from flickering the mark. Focus locks when the Spark flies.
     /// </summary>
     public sealed class GazeFocus : MonoBehaviour
@@ -35,12 +36,8 @@ namespace Ricochet.Gameplay
 
         /// <summary>The focused crystal, or null.</summary>
         public Crystal Focused { get; private set; }
-
-        /// <summary>
-        /// The gaze ray: head forward by default. An eye-tracking source assigns a delegate that returns false when it
-        /// has no valid gaze, and head gaze is used for that frame.
-        /// </summary>
-        public System.Func<(Vector3 origin, Vector3 direction)?> GazeRay;
+        /// <summary>The gaze is still on the focused crystal (the focus itself stays until another one takes it).</summary>
+        public bool GazeOnFocused { get; private set; }
 
         void Awake()
         {
@@ -63,7 +60,9 @@ namespace Ricochet.Gameplay
 
         void Track(float dt)
         {
+            GazeOnFocused = false;
             if (!TryGaze(out Vector3 origin, out Vector3 dir)) return;
+            if (Focused != null) GazeOnFocused = Vector3.Angle(dir, Focused.transform.position - origin) < _maxAngle * 1.5f;
             Crystal best = null;
             float bestAngle = _maxAngle;
             var active = _board.Active;
@@ -86,24 +85,12 @@ namespace Ricochet.Gameplay
             _sfx.PlayTick(3, best.transform.position);
         }
 
-        bool TryGaze(out Vector3 origin, out Vector3 dir)
-        {
-            var ray = GazeRay?.Invoke();
-            if (ray.HasValue)
-            {
-                origin = ray.Value.origin;
-                dir = ray.Value.direction;
-                return true;
-            }
-            var head = _playArea.Head;
-            origin = head != null ? head.position : Vector3.zero;
-            dir = head != null ? head.forward : Vector3.forward;
-            return head != null;
-        }
+        bool TryGaze(out Vector3 origin, out Vector3 dir) => EyeGaze.Ray(_playArea.Head, out origin, out dir);
 
         public void Clear()
         {
             Focused = null;
+            GazeOnFocused = false;
             _candidate = null;
         }
 

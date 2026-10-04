@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Meta.XR.MRUtilityKit;
 using UnityEngine;
 
@@ -24,6 +25,8 @@ namespace Ricochet.Gameplay
         // The clear zone is an ellipse shaped like the crack plus its glow: narrow and tall.
         const float ClearHalfWidth = 0.28f, ClearHalfHeight = 0.42f;
         const float HeroClearance = 0.75f;
+        // Trophy crowns: a rift on top of one is allowed (it steps aside) but only when no other wall spot is clear.
+        const float CrownClearance = 0.5f, CrownPenalty = 1.5f;
         // +/-24 is the critical-content band; +/-30 is a penalized last resort, still inside the Glasses' ~+/-35 view.
         static readonly float[] Yaws = { 0f, -6f, 6f, -12f, 12f, -18f, 18f, -24f, 24f, -30f, 30f };
         // Higher pitches look over furniture; 18 degrees stays inside the +/-20 degree vertical band.
@@ -31,7 +34,9 @@ namespace Ricochet.Gameplay
 
         /// <param name="avoid">A previous rift position to move away from (the next encounter opens elsewhere).</param>
         /// <param name="keepClear">The hero landing point: the guaranteed first shot keeps its cluster.</param>
-        public static Placement Place(MRUKRoom room, Pose seat, Vector3? avoid = null, Vector3? keepClear = null)
+        /// <param name="crowns">Trophy crowns on the walls, kept clear of when another spot is as good.</param>
+        public static Placement Place(MRUKRoom room, Pose seat, Vector3? avoid = null, Vector3? keepClear = null,
+                                      List<Vector3> crowns = null)
         {
             Vector3 eye = seat.position;
             Vector3 forward = Vector3.ProjectOnPlane(seat.forward, Vector3.up).normalized;
@@ -58,6 +63,9 @@ namespace Ricochet.Gameplay
 
                     float score = -Mathf.Abs(yaw) * 0.04f - Mathf.Abs(pitch - 6f) * 0.03f - Mathf.Abs(hit.distance - 2.8f) * 0.3f
                                   - (Mathf.Abs(yaw) > 25f ? 1f : 0f);
+                    if (crowns != null)
+                        foreach (var c in crowns)
+                            if ((c - hit.point).sqrMagnitude < CrownClearance * CrownClearance) { score -= CrownPenalty; break; }
                     if (score <= bestScore) continue;
                     bestScore = score;
                     best = new Placement
@@ -69,7 +77,7 @@ namespace Ricochet.Gameplay
             }
             if (best.OnWall) return best;
             // The same wall again beats a portal in the air.
-            if (avoid.HasValue) return Place(room, seat, null, keepClear);
+            if (avoid.HasValue) return Place(room, seat, null, keepClear, crowns);
 
             // No clear wall: hang the rift in the air ahead, facing the player: up and to the side away from the hero
             // cluster so the guaranteed first shot keeps its target.

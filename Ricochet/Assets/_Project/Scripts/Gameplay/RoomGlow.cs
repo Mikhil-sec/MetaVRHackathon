@@ -23,7 +23,15 @@ namespace Ricochet.Gameplay
             public float Radius;
             public float Age;
             public float Duration;
+            public float From; // the level (share of Color) the attack rises from: a merged pulse never dips first
         }
+
+        // Photosensitivity by design (no option needed): a pulse rises over a few frames instead of stepping on, and
+        // pulses on one patch of wall less than 1/3 s apart merge into one sustained light, so a chain of hits in a
+        // cluster warms the wall instead of strobing it (at most ~3 rise-and-fall cycles a second per area).
+        const float Attack = 0.06f;
+        const float MergeWindow = 0.33f;
+        const float MergeMaxRadius = 2f;
 
         [SerializeField] Spark _spark;
         [SerializeField] Color _sparkColor = new(0.3f, 0.85f, 1f);
@@ -66,6 +74,25 @@ namespace Ricochet.Gameplay
         /// <summary>A brief pulse of light on nearby real surfaces. Replaces the oldest flash when all are busy.</summary>
         public void Pulse(Vector3 position, Color color, float radius, float duration)
         {
+            // Only local pulses merge: the big room-wide moments (victory, board clear, defeat) are single events.
+            for (int i = 0; radius < MergeMaxRadius && i < _flashes.Length; i++)
+            {
+                ref Flash f = ref _flashes[i];
+                float reach = 0.5f * (f.Radius + radius);
+                if (f.Duration <= 0f || f.Age >= MergeWindow || f.Radius >= MergeMaxRadius ||
+                    (f.Position - position).sqrMagnitude > reach * reach) continue;
+                // Same patch, too soon for a new flash: lift the running light from where it is to the brighter peak.
+                Color now = f.Color * Envelope(in f);
+                var peak = new Color(Mathf.Max(f.Color.r, color.r), Mathf.Max(f.Color.g, color.g), Mathf.Max(f.Color.b, color.b));
+                f.From = Mathf.Clamp01(now.maxColorComponent / Mathf.Max(1e-4f, peak.maxColorComponent));
+                f.Color = peak;
+                f.Position = Vector3.Lerp(f.Position, position, 0.5f);
+                f.Radius = Mathf.Max(f.Radius, radius);
+                f.Duration = Mathf.Max(f.Duration - f.Age, duration) * 1.5f; // and it lingers, so the next lift is small
+                f.Age = 0f;
+                return;
+            }
+
             int slot = 0;
             float oldest = -1f;
             for (int i = 0; i < _flashes.Length; i++)
@@ -75,6 +102,18 @@ namespace Ricochet.Gameplay
                 if (progress > oldest) { oldest = progress; slot = i; }
             }
             _flashes[slot] = new Flash { Position = position, Color = color, Radius = radius, Duration = duration };
+        }
+
+        /// <summary>0..1: a short smooth attack from <see cref="Flash.From"/>, then an eased decay.</summary>
+        static float Envelope(in Flash f)
+        {
+            if (f.Age < Attack)
+            {
+                float k = f.Age / Attack;
+                return Mathf.Lerp(f.From, 1f, k * k * (3f - 2f * k));
+            }
+            float t = (f.Age - Attack) / Mathf.Max(0.01f, f.Duration - Attack);
+            return t >= 1f ? 0f : (1f - t) * (1f - t);
         }
 
         /// <summary>
@@ -124,10 +163,9 @@ namespace Ricochet.Gameplay
                 f.Age += dt;
                 float t = f.Age / f.Duration;
                 if (t >= 1f) { f.Duration = 0f; _colors[slot] = Vector4.zero; continue; }
-                // Fast attack, eased decay; the radius swells slightly as it fades.
-                float intensity = (1f - t) * (1f - t);
+                // Quick smooth attack, eased decay; the radius swells slightly as it fades.
                 _sources[slot] = new Vector4(f.Position.x, f.Position.y, f.Position.z, f.Radius * (0.8f + 0.4f * t));
-                _colors[slot] = f.Color * intensity;
+                _colors[slot] = f.Color * Envelope(in f);
             }
             _sources[MaxGlows - 1] = _steadySource;
             _colors[MaxGlows - 1] = _steadyColor;

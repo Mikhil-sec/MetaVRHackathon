@@ -39,6 +39,11 @@ namespace Ricochet.Room
         public static bool IsPocket => PocketArena.Active;
 
         public event Action Ready;
+        /// <summary>
+        /// The player re-centred (held the Meta button, e.g. after turning their chair): the seat moved to where they
+        /// now sit and look. Seat-relative things (sling, HUD) follow; the room's content stays where it is.
+        /// </summary>
+        public event Action Reseated;
 
         public Transform Head => _head;
 
@@ -48,7 +53,12 @@ namespace Ricochet.Room
             StartCoroutine(LoadRoom());
         }
 
-        void OnDestroy() => PocketArena.Deactivate();
+        void OnDestroy()
+        {
+            PocketArena.Deactivate();
+            if (OVRManager.display != null) OVRManager.display.RecenteredPose -= OnRecentered;
+            OVRManager.TrackingOriginChangePending -= OnOriginChangePending;
+        }
 
         static readonly System.Collections.Generic.List<XRDisplaySubsystem> s_displays = new();
 
@@ -179,9 +189,19 @@ namespace Ricochet.Room
         /// Asks for the scene permission. A request made while another permission dialog is open fails silently,
         /// so it polls the grant and asks again every few seconds until it gets an answer.
         /// </summary>
-        IEnumerator RequestScenePermission(Action<bool> done)
+        IEnumerator RequestScenePermission(Action<bool> done) => RequestPermission(OVRPermissionsRequester.ScenePermission, int.MaxValue, done);
+
+        // Eye gaze (Focus, Look and Fire) on headsets that have eye tracking; head gaze plays fully without it.
+        // Asked after the seat is taken, so it never lands while the scene or Space Setup dialog is open.
+        IEnumerator RequestEyeTracking()
         {
-            string permission = OVRPermissionsRequester.ScenePermission;
+            if (!OVRPlugin.eyeTrackingSupported) yield break;
+            yield return RequestPermission(OVRPermissionsRequester.EyeTrackingPermission, 3,
+                ok => Debug.Log($"[Ricochet] Eye tracking permission: {(ok ? "granted" : "not granted")}"));
+        }
+
+        IEnumerator RequestPermission(string permission, int maxAsks, Action<bool> done)
+        {
             int answer = Permission.HasUserAuthorizedPermission(permission) ? 1 : 0;
             var callbacks = new PermissionCallbacks();
             callbacks.PermissionGranted += _ => answer = 1;
@@ -191,6 +211,7 @@ namespace Ricochet.Room
             {
                 if (Time.realtimeSinceStartup >= nextAsk)
                 {
+                    if (maxAsks-- <= 0) break; // a request made while another dialog is open fails silently
                     Permission.RequestUserPermission(permission, callbacks);
                     nextAsk = Time.realtimeSinceStartup + 5f;
                 }
@@ -203,11 +224,55 @@ namespace Ricochet.Room
 
         void TakeSeat()
         {
+            Seat = SeatFromHead();
+            IsReady = true;
+#if UNITY_ANDROID && !UNITY_EDITOR
+            StartCoroutine(RequestEyeTracking());
+#endif
+            // Two ways a recenter arrives: an app/runtime request (RecenteredPose, the frame after), and the user's
+            // system recenter (OpenXR reference-space change, announced before it applies).
+            if (OVRManager.display != null) OVRManager.display.RecenteredPose += OnRecentered;
+            OVRManager.TrackingOriginChangePending += OnOriginChangePending;
+            Ready?.Invoke();
+        }
+
+        Pose SeatFromHead()
+        {
             Vector3 flatForward = Vector3.ProjectOnPlane(_head.forward, Vector3.up);
             if (flatForward.sqrMagnitude < 1e-4f) flatForward = Vector3.forward;
-            Seat = new Pose(_head.position, Quaternion.LookRotation(flatForward.normalized, Vector3.up));
-            IsReady = true;
-            Ready?.Invoke();
+            return new Pose(_head.position, Quaternion.LookRotation(flatForward.normalized, Vector3.up));
+        }
+
+        void OnRecentered()
+        {
+            Debug.Log("[Ricochet] Recentered: the seat follows the player");
+            Reseat();
+        }
+
+        float _reseatAt = -1f;
+
+        // Pending: the new origin applies over the next frames; take the seat once it has (one re-seat per recenter).
+        void OnOriginChangePending(OVRManager.TrackingOrigin origin, OVRPose? previous)
+        {
+            if (_reseatAt > 0f) return;
+            _reseatAt = Time.realtimeSinceStartup + 0.35f;
+            StartCoroutine(ReseatWhenSettled());
+        }
+
+        IEnumerator ReseatWhenSettled()
+        {
+            while (Time.realtimeSinceStartup < _reseatAt) yield return null;
+            _reseatAt = -1f;
+            Debug.Log("[Ricochet] Tracking origin changed: the seat follows the player");
+            Reseat();
+        }
+
+        /// <summary>Takes the seat again from the head as it is now (a recenter; DevHooks for tests).</summary>
+        public void Reseat()
+        {
+            if (!IsReady || _head == null) return;
+            Seat = SeatFromHead();
+            Reseated?.Invoke();
         }
 
         void PlaceDesktopSeat()

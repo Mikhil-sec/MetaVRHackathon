@@ -23,13 +23,20 @@ namespace Ricochet.Gameplay
         static readonly int GlowId = Shader.PropertyToID("_Glow");
         static readonly int ScaleId = Shader.PropertyToID("_Scale");
         static readonly int KindId = Shader.PropertyToID("_Kind");
-        static readonly int ColorId = Shader.PropertyToID("_Color");
-        static readonly int IntensityId = Shader.PropertyToID("_Intensity");
+        // Shelf slots around the rift spot, in wall-plane metres (along the wall, up): a row first, then a row above.
+        static readonly Vector2[] Slots =
+        {
+            new(0f, 0f), new(0.22f, 0f), new(-0.22f, 0f), new(0.44f, 0f), new(-0.44f, 0f),
+            new(0.11f, 0.21f), new(-0.11f, 0.21f), new(0.33f, 0.21f), new(-0.33f, 0.21f),
+            new(0.66f, 0f), new(-0.66f, 0f), new(0f, -0.21f), new(0.22f, -0.21f), new(-0.22f, -0.21f),
+        };
+        const float SlotClearance = 0.18f;
 
         [SerializeField] PlayArea _playArea;
         [SerializeField] Mesh _crystalMesh;
         [SerializeField] Material _crystalMaterial;
-        [SerializeField] Material _haloMaterial;
+        [SerializeField] Material _haloMaterial;       // gold, breathing (material values, so crowns can batch)
+        [SerializeField] Material _glintMaterial;      // four-point star that flashes now and then
         [SerializeField] SfxPlayer _sfx;
         [SerializeField] ShatterFx _fx;
         [SerializeField] RoomGlow _glow;
@@ -59,6 +66,7 @@ namespace Ricochet.Gameplay
             public Transform Root;
             public OVRSpatialAnchor Anchor;
             public float Grow = 1f;
+            public bool Hidden;                         // stepped aside for a rift opening on top of it
         }
 
         Shelf _shelf = new();
@@ -66,6 +74,8 @@ namespace Ricochet.Gameplay
         readonly List<OVRSpatialAnchor.UnboundAnchor> _unbound = new();
         MaterialPropertyBlock _block;
         bool _restored;
+        Vector3 _yieldAt;
+        float _yieldRadius;                             // > 0 while a rift is open on the shelf
 
         public int Count => _shelf.Items.Count;
         static string FilePath => Path.Combine(Application.persistentDataPath, "trophies.json");
@@ -152,6 +162,7 @@ namespace Ricochet.Gameplay
         /// <summary>A sealed boss: a crown grows out of the wall where the rift was, and is anchored there.</summary>
         public async void Place(Vector3 position, Vector3 wallNormal, int score, int chain)
         {
+            position = FreeSlot(position, wallNormal);
             var record = new Record
             {
                 Score = score,
@@ -190,6 +201,64 @@ namespace Ricochet.Gameplay
             Debug.Log($"[Ricochet] Trophy placed ({_shelf.Items.Count} on the shelf){(record.Uuid.Length > 0 ? ", anchor " + record.Uuid : ", no anchor")}");
         }
 
+        /// <summary>World positions of the crowns on show (the rift keeps away from them when it can).</summary>
+        public void GetPositions(List<Vector3> into)
+        {
+            into.Clear();
+            foreach (var s in _shown) if (s.Root != null) into.Add(s.Root.position);
+        }
+
+        /// <summary>A rift opens on the shelf: crowns within the radius sink into the wall until <see cref="Return"/>.</summary>
+        public void Yield(Vector3 at, float radius)
+        {
+            _yieldAt = at;
+            _yieldRadius = radius;
+            foreach (var s in _shown)
+            {
+                if (s.Root == null || s.Hidden || (s.Root.position - at).sqrMagnitude > radius * radius) continue;
+                s.Hidden = true;
+                if (_fx != null) _fx.Burst(s.Root.position, _gold, 0.5f);
+            }
+        }
+
+        /// <summary>The rift sealed: the crowns that stepped aside grow back.</summary>
+        public void Return()
+        {
+            _yieldRadius = 0f;
+            foreach (var s in _shown)
+            {
+                if (!s.Hidden) continue;
+                s.Hidden = false;
+                s.Grow = 0f;
+            }
+        }
+
+        /// <summary>The nearest shelf slot on the same wall that no crown holds yet, so repeat wins form a row.</summary>
+        Vector3 FreeSlot(Vector3 position, Vector3 normal)
+        {
+            Vector3 along = Vector3.Cross(Vector3.up, normal);
+            if (along.sqrMagnitude < 0.25f) return position; // not a vertical surface
+            along.Normalize();
+            var room = _playArea.Room;
+            foreach (var slot in Slots)
+            {
+                Vector3 p = position + along * slot.x + Vector3.up * slot.y;
+                bool taken = false;
+                foreach (var s in _shown)
+                    if (s.Root != null && (s.Root.position - normal * 0.03f - p).sqrMagnitude < SlotClearance * SlotClearance) { taken = true; break; }
+                if (taken) continue;
+                if (slot != Vector2.zero && room != null)
+                {
+                    // The slot must still be on a wall, flush with this one (not past a corner, not in a doorway).
+                    if (!room.Raycast(new Ray(p + normal * 0.3f, -normal), 0.5f, out RaycastHit hit, out var anchor) || anchor == null ||
+                        (anchor.Label & Meta.XR.MRUtilityKit.MRUKAnchor.SceneLabels.WALL_FACE) == 0 ||
+                        Mathf.Abs(hit.distance - 0.3f) > 0.05f || Vector3.Dot(hit.normal, normal) < 0.9f) continue;
+                }
+                return p;
+            }
+            return position;
+        }
+
         async System.Threading.Tasks.Task Retire(Record record)
         {
             _shelf.Items.Remove(record);
@@ -207,60 +276,84 @@ namespace Ricochet.Gameplay
             root.SetParent(parent != null ? parent : transform, false);
             root.SetPositionAndRotation(position, rotation);
 
-            // A crown: five gold crystals fanned up and out of the wall, the middle one tallest, on a soft halo.
+            // A crown: five gold crystals fanned up and out of the wall, the middle one tallest, an iridescent jewel at
+            // their root (the focal point: hue contrast against all that gold), star glints on the tips, and a
+            // breathing halo *behind* the crystals so it lights the wall rather than washing out the facets.
             for (int i = 0; i < 5; i++)
             {
                 float a = (i - 2) * 26f;                      // degrees from straight up, in the wall's plane
                 float tall = i == 2 ? 1.3f : i == 1 || i == 3 ? 1.1f : 0.9f;
-                var go = new GameObject("Crystal" + i);
-                go.transform.SetParent(root, false);
                 Quaternion fan = Quaternion.AngleAxis(-a, Vector3.forward);
-                go.transform.localPosition = fan * (Vector3.up * 0.035f) + Vector3.forward * 0.02f;
                 // The crystal's long axis is its local up: fan it out, then lean it out of the wall a little.
-                go.transform.localRotation = fan * Quaternion.AngleAxis(-18f, Vector3.right);
-                go.transform.localScale = new Vector3(1f, tall, 1f) * _crystalSize;
-                go.AddComponent<MeshFilter>().sharedMesh = _crystalMesh;
-                var r = go.AddComponent<MeshRenderer>();
-                r.sharedMaterial = _crystalMaterial;
-                r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-                r.receiveShadows = false;
-                _block.Clear();
-                _block.SetColor(BaseColorId, _gold);
-                _block.SetFloat(KindId, (float)CrystalKind.Gold);
-                _block.SetFloat(ScaleId, 1f);
-                _block.SetFloat(GlowId, 0.4f);
-                r.SetPropertyBlock(_block);
+                Quaternion rot = fan * Quaternion.AngleAxis(-18f, Vector3.right);
+                Vector3 pos = fan * (Vector3.up * 0.035f) + Vector3.forward * 0.02f;
+                Crystal(root, pos, rot, new Vector3(1f, tall, 1f) * _crystalSize, CrystalKind.Gold, _gold, 0.15f);
+                // CrystalMesh spans y -0.45..1.1: the tip sits ~1.05 up the crystal's axis.
+                if (i % 2 == 0) Quad(root, "Glint", _glintMaterial, pos + rot * (Vector3.up * (1.05f * tall * _crystalSize)), 0.11f);
             }
-            if (_haloMaterial != null)
-            {
-                var halo = new GameObject("Halo");
-                halo.transform.SetParent(root, false);
-                halo.transform.localPosition = new Vector3(0f, 0.04f, 0.03f);
-                halo.transform.localScale = Vector3.one * 0.28f;
-                halo.AddComponent<MeshFilter>().sharedMesh = RewardPicker.Quad();
-                var hr = halo.AddComponent<MeshRenderer>();
-                hr.sharedMaterial = _haloMaterial;
-                hr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-                hr.receiveShadows = false;
-                _block.Clear();
-                _block.SetColor(ColorId, _gold);
-                _block.SetFloat(IntensityId, 0.45f);
-                hr.SetPropertyBlock(_block);
-            }
+            Crystal(root, new Vector3(0f, -0.004f, 0.045f), Quaternion.AngleAxis(-62f, Vector3.right),
+                    Vector3.one * (_crystalSize * 0.55f), CrystalKind.Prism, Color.white, 0.25f);
+            Quad(root, "Halo", _haloMaterial, new Vector3(0f, 0.045f, 0f), 0.36f); // a warm pool on the wall: findable from the seat
 
             var shown = new Shown { Record = record, Root = root, Grow = grow };
-            root.localScale = Vector3.one * OutBack(grow);
+            if (_yieldRadius > 0f && (position - _yieldAt).sqrMagnitude < _yieldRadius * _yieldRadius) { shown.Hidden = true; shown.Grow = 0f; }
+            root.localScale = Vector3.one * (shown.Hidden ? 0f : OutBack(grow));
+            if (shown.Hidden) root.gameObject.SetActive(false);
             _shown.Add(shown);
             return shown;
         }
 
+        void Crystal(Transform root, Vector3 pos, Quaternion rot, Vector3 scale, CrystalKind kind, Color color, float glow)
+        {
+            var go = new GameObject("Crystal");
+            go.transform.SetParent(root, false);
+            go.transform.SetLocalPositionAndRotation(pos, rot);
+            go.transform.localScale = scale;
+            go.AddComponent<MeshFilter>().sharedMesh = _crystalMesh;
+            var r = go.AddComponent<MeshRenderer>();
+            r.sharedMaterial = _crystalMaterial;
+            r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            r.receiveShadows = false;
+            _block.Clear();
+            _block.SetColor(BaseColorId, color);
+            _block.SetFloat(KindId, (float)kind);
+            _block.SetFloat(ScaleId, 1f);
+            _block.SetFloat(GlowId, glow);
+            r.SetPropertyBlock(_block);
+        }
+
+        static void Quad(Transform root, string name, Material material, Vector3 pos, float size)
+        {
+            if (material == null) return;
+            var go = new GameObject(name);
+            go.transform.SetParent(root, false);
+            go.transform.localPosition = pos;
+            go.transform.localScale = Vector3.one * size;
+            go.AddComponent<MeshFilter>().sharedMesh = RewardPicker.Quad();
+            var r = go.AddComponent<MeshRenderer>();
+            r.sharedMaterial = material;
+            r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            r.receiveShadows = false;
+        }
+
         void Update()
         {
-            // Crowns grow in (placed or restored) over about a second, then sit still: no per-frame cost after.
+            // Crowns grow in (placed, restored or returning) over about a second and sink away in a third of one, then
+            // sit still: no per-frame cost after (the glints and the halo animate in their shader).
             for (int i = 0; i < _shown.Count; i++)
             {
                 var s = _shown[i];
-                if (s.Grow >= 1f || s.Root == null) continue;
+                if (s.Root == null) continue;
+                if (s.Hidden)
+                {
+                    if (!s.Root.gameObject.activeSelf) continue;
+                    s.Grow = Mathf.Max(0f, s.Grow - RealTime.DeltaTime / 0.35f);
+                    s.Root.localScale = Vector3.one * (s.Grow * s.Grow);
+                    if (s.Grow <= 0f) s.Root.gameObject.SetActive(false);
+                    continue;
+                }
+                if (s.Grow >= 1f) continue;
+                if (!s.Root.gameObject.activeSelf) s.Root.gameObject.SetActive(true);
                 s.Grow = Mathf.Min(1f, s.Grow + RealTime.DeltaTime / 1.1f);
                 s.Root.localScale = Vector3.one * OutBack(s.Grow);
             }

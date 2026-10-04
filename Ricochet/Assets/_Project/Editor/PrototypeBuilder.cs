@@ -70,6 +70,9 @@ namespace Ricochet.EditorTools
             Set(playArea, "_rigRoot", rig.transform);
             Set(playArea, "_head", head);
             Set(GetOrAdd<DesktopLook>(game), "_rigRoot", rig.transform);
+            var handLook = GetOrAdd<Ricochet.Input.HandLook>(game);
+            Set(handLook, "_rigRoot", rig.transform);
+            Set(handLook, "_handLight", Mat("HandLight", Shader.Find("Ricochet/HandLight"), Color.white));
             var sfx = GetOrAdd<SfxPlayer>(game);
 
             var board = Fresh<BoardGenerator>(GetOrCreate("Board", game.transform));
@@ -178,8 +181,25 @@ namespace Ricochet.EditorTools
             Set(rewards, "_glyphMaterial", glyphMat);
             var scrimMat = Mat("Scrim", Shader.Find("Ricochet/Scrim"), new Color(0.035f, 0.015f, 0.07f, 1f));
             Set(rewards, "_scrimMaterial", scrimMat);
+            Set(hud, "_scrimMaterial", scrimMat);
             Set(encounter, "_rewards", rewards);
             Set(hud, "_picker", rewards);
+            Set(hud, "_sling", sling);
+
+            // Accessibility: Look and Fire (gaze target, pinch anywhere or look to fire), toggled by the eye glyph.
+            var assist = Fresh<AssistAim>(GetOrCreate("AssistAim", game.transform));
+            var assistRingMat = Mat("AssistRing", Shader.Find("Ricochet/Ring"), Color.white);
+            assistRingMat.SetFloat("_Segments", 0f);
+            assistRingMat.SetFloat("_Width", 0.025f);
+            Set(rewards, "_ringMaterial", assistRingMat);
+            Set(assist, "_playArea", playArea);
+            Set(assist, "_sling", sling);
+            Set(assist, "_focus", focus);
+            Set(assist, "_picker", rewards);
+            Set(assist, "_sfx", sfx);
+            Set(assist, "_dwellRing", Quad("DwellRing", assist.gameObject, assistRingMat, 0.34f));
+            Set(assist, "_toggleRing", Quad("ToggleRing", assist.gameObject, assistRingMat, 0.06f));
+            Set(assist, "_toggleGlyph", Quad("ToggleEye", assist.gameObject, glyphMat, 0.03f));
             var banner = Fresh<Banner>(GetOrCreate("Banner", game.transform));
             Set(banner, "_playArea", playArea);
             Set(banner, "_scrimMaterial", scrimMat);
@@ -187,13 +207,29 @@ namespace Ricochet.EditorTools
             Set(trophies, "_playArea", playArea);
             Set(trophies, "_crystalMesh", crystalMesh);
             Set(trophies, "_crystalMaterial", crystalMat);
-            Set(trophies, "_haloMaterial", HaloMat("TrophyHalo", Color.white, 0.6f));
+            var trophyHalo = HaloMat("TrophyHalo", new Color(1f, 0.8f, 0.38f), 0.7f);
+            trophyHalo.SetFloat("_Breathe", 1f);
+            Set(trophies, "_haloMaterial", trophyHalo);
+            var trophyGlint = HaloMat("TrophyGlint", new Color(1f, 0.93f, 0.75f), 1.6f);
+            trophyGlint.SetFloat("_Star", 1f);
+            trophyGlint.SetFloat("_Twinkle", 1f);
+            Set(trophies, "_glintMaterial", trophyGlint);
             Set(trophies, "_sfx", sfx);
             Set(trophies, "_fx", fx);
             Set(trophies, "_glow", glow);
             Set(encounter, "_trophies", trophies);
             Set(encounter, "_banner", banner);
             log.AppendLine("Run: reward picker, banner");
+
+            // Audio: the spatializer's room from the real room, and the music bed (two beat-locked stems).
+            var acoustics = Fresh<RoomAcoustics>(GetOrCreate("RoomAcoustics", game.transform));
+            Set(acoustics, "_playArea", playArea);
+            var music = Fresh<MusicBed>(GetOrCreate("Music", game.transform));
+            Set(music, "_bed", MusicClip("bed"));
+            Set(music, "_pulse", MusicClip("pulse"));
+            Set(music, "_drama", drama);
+            Set(encounter, "_music", music);
+            log.AppendLine("Audio: room acoustics, music bed");
             var lightGo = GetOrCreate("DesktopLight", desktop.transform);
             var light = GetOrAdd<Light>(lightGo);
             light.type = LightType.Directional;
@@ -279,7 +315,8 @@ namespace Ricochet.EditorTools
         {
             string path = PrefabDir + "/Crystal.prefab";
             var go = new GameObject("Crystal");
-            go.AddComponent<MeshFilter>().sharedMesh = mesh;
+            var mf = go.AddComponent<MeshFilter>();
+            mf.sharedMesh = mesh;
             var mr = go.AddComponent<MeshRenderer>();
             mr.sharedMaterial = mat;
             mr.shadowCastingMode = ShadowCastingMode.Off;
@@ -291,6 +328,17 @@ namespace Ricochet.EditorTools
             go.transform.localScale = Vector3.one * 0.13f;
             var crystal = go.AddComponent<Crystal>();
             Set(crystal, "_renderer", mr);
+            Set(crystal, "_filter", mf);
+            // One silhouette per kind (accessibility: types read without color). Normal is the shared crystal mesh.
+            var so = new SerializedObject(crystal);
+            var meshes = so.FindProperty("_kindMeshes");
+            var kinds = (CrystalKind[])System.Enum.GetValues(typeof(CrystalKind));
+            meshes.arraySize = kinds.Length;
+            foreach (var kind in kinds)
+                meshes.GetArrayElementAtIndex((int)kind).objectReferenceValue = kind == CrystalKind.Normal
+                    ? mesh
+                    : SaveMesh(CrystalMesh.Get(kind), MeshDir + "/Crystal" + kind + ".asset");
+            so.ApplyModifiedPropertiesWithoutUndo();
             var prefab = PrefabUtility.SaveAsPrefabAsset(go, path);
             Object.DestroyImmediate(go);
             return prefab;
@@ -393,9 +441,23 @@ namespace Ricochet.EditorTools
             var ghost = Fresh<GhostHandDemo>(ghostGo);
             Set(ghost, "_sling", sling);
             Set(ghost, "_head", Object.FindAnyObjectByType<OVRCameraRig>().centerEyeAnchor);
-            Set(ghost, "_thumb", Quad("Thumb", ghostGo, ghostGlow, 0.028f));
-            Set(ghost, "_index", Quad("Index", ghostGo, ghostGlow, 0.028f));
-            Set(ghost, "_ghostSpark", Quad("GhostSpark", ghostGo, ghostGlow, 0.05f));
+            // v2: a baked hand of light (Dev/HandBake, morphed open-to-pinch in GhostHand.shader) replaces v1's two
+            // fingertip dots.
+            foreach (var old in new[] { "Thumb", "Index" })
+            {
+                var stale = ghostGo.transform.Find(old);
+                if (stale != null) Object.DestroyImmediate(stale.gameObject);
+            }
+            var handGo = GetOrCreate("Hand", ghostGo.transform);
+            GetOrAdd<MeshFilter>(handGo).sharedMesh = AssetDatabase.LoadAssetAtPath<Mesh>(MeshDir + "/GhostHand.asset");
+            var handRenderer = GetOrAdd<MeshRenderer>(handGo);
+            handRenderer.sharedMaterial = Mat("GhostHand", Shader.Find("Ricochet/GhostHand"), Color.white);
+            handRenderer.shadowCastingMode = ShadowCastingMode.Off;
+            handRenderer.receiveShadows = false;
+            Set(ghost, "_hand", handRenderer);
+            Set(ghost, "_spark", spark);
+            Set(ghost, "_glint", Quad("Glint", ghostGo, ghostGlow, 0.035f));
+            Set(ghost, "_ghostSpark", Quad("GhostSpark", ghostGo, ghostGlow, 0.075f)); // stands in for the Spark it carries
             Set(ghost, "_path", path);
 
             var so = new SerializedObject(fx);
@@ -461,6 +523,7 @@ namespace Ricochet.EditorTools
             Set(rift, "_crack", crackRenderer);
             Set(rift, "_halo", riftHalo.transform);
             Set(rift, "_glow", glow);
+            Set(rift, "_sfx", sfx);
 
             var creatureGo = GetOrCreate("Creature", game.transform);
             creatureGo.SetActive(true);
@@ -479,6 +542,10 @@ namespace Ricochet.EditorTools
             var motes = Fresh<LightMotes>(GetOrCreate("Motes", game.transform));
             Set(motes, "_moteMaterial", HaloMat("MoteLight", new Color(1f, 0.8f, 0.35f), 2.4f));
             Set(motes, "_boltMaterial", HaloMat("MoteBolt", new Color(1f, 0.2f, 0.55f), 1.8f));
+            Set(motes, "_seedMaterial", HaloMat("MoteSeed", new Color(0.62f, 0.45f, 1f), 2.3f));
+            Set(motes, "_moteStreak", StreakMat("MoteLightStreak", new Color(1f, 0.75f, 0.3f), 1.5f));
+            Set(motes, "_boltStreak", StreakMat("MoteBoltStreak", new Color(1f, 0.2f, 0.55f), 1.4f));
+            Set(motes, "_seedStreak", StreakMat("MoteSeedStreak", new Color(0.62f, 0.45f, 1f), 1.6f));
 
             var encounter = Fresh<EncounterDirector>(game);
             Set(encounter, "_playArea", playArea);
@@ -496,9 +563,37 @@ namespace Ricochet.EditorTools
             return encounter;
         }
 
+        // Music stems stream (Vorbis) instead of sitting decompressed in memory (TECH_GUIDE section 8).
+        static AudioClip MusicClip(string name)
+        {
+            string path = "Assets/_Project/Audio/Music/" + name + ".ogg";
+            if (AssetImporter.GetAtPath(path) is AudioImporter importer)
+            {
+                var settings = importer.defaultSampleSettings;
+                if (settings.loadType != AudioClipLoadType.Streaming || settings.compressionFormat != AudioCompressionFormat.Vorbis)
+                {
+                    settings.loadType = AudioClipLoadType.Streaming;
+                    settings.compressionFormat = AudioCompressionFormat.Vorbis;
+                    settings.quality = 0.6f;
+                    importer.defaultSampleSettings = settings;
+                    importer.loadInBackground = true;
+                    importer.SaveAndReimport();
+                }
+            }
+            return AssetDatabase.LoadAssetAtPath<AudioClip>(path);
+        }
+
         static Material HaloMat(string name, Color color, float intensity)
         {
             var mat = Mat(name, Shader.Find("Ricochet/Halo"), color);
+            mat.SetColor("_Color", color);
+            mat.SetFloat("_Intensity", intensity);
+            return mat;
+        }
+
+        static Material StreakMat(string name, Color color, float intensity)
+        {
+            var mat = Mat(name, Shader.Find("Ricochet/Streak"), color);
             mat.SetColor("_Color", color);
             mat.SetFloat("_Intensity", intensity);
             return mat;

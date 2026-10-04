@@ -17,6 +17,10 @@ namespace Ricochet.Audio
         AudioClip _crash;
         AudioClip _riftOpen, _hurt, _bolt, _shieldHit, _guard;
         AudioClip _grab, _twang, _cancel, _swell;
+        AudioClip _zip, _sealPop, _shatter, _growl, _emerge;
+
+        /// <summary>The rift's looping hum, for its own spatial source.</summary>
+        public AudioClip RiftHum { get; private set; }
         AudioClip[] _pullTicks;
         public const int PullSteps = 6;
         AudioSource _drumroll;
@@ -57,6 +61,12 @@ namespace Ricochet.Audio
             _twang = ChimeSynth.Pluck("Twang", ChimeSynth.NoteFrequency(RootMidi - 24, 0), 0.9f, 2.2f, 0.9f, 22);
             _cancel = ChimeSynth.Sweep("Cancel", 520f, 260f, 0.22f, 0.15f, 9f, 23);
             _swell = ChimeSynth.Sweep("Swell", 220f, 880f, 1.8f, 0.2f, 0.6f, 24);
+            _zip = ChimeSynth.Zip("Zip");
+            _sealPop = ChimeSynth.Bell("SealPop", ChimeSynth.NoteFrequency(RootMidi - 12, 0), 0.9f, 0.7f);
+            _shatter = ChimeSynth.Shatter("Shatter");
+            _growl = ChimeSynth.Sweep("Growl", 70f, 150f, 0.55f, 0.55f, 1.2f, 52);
+            _emerge = ChimeSynth.Sweep("Emerge", 360f, 85f, 0.8f, 0.6f, 2.5f, 53);
+            RiftHum = ChimeSynth.Drone("RiftHum");
             _pullTicks = new AudioClip[PullSteps];
             for (int n = 0; n < PullSteps; n++)
                 _pullTicks[n] = ChimeSynth.Pluck("PullTick" + n, ChimeSynth.NoteFrequency(RootMidi, n), 0.09f, 45f, 0.6f, 30 + n);
@@ -81,7 +91,8 @@ namespace Ricochet.Audio
         public void PlayCrash(Vector3 position) => Play(_crash, position, 1f, 1f);
 
         public void PlayRiftOpen(Vector3 position) => Play(_riftOpen, position, 1f, 1f);
-        public void PlayHurt(Vector3 position) => Play(_hurt, position, 0.8f, Random.Range(0.93f, 1.07f));
+        /// <summary>The creature squeals as your light gets through (pitch: its voice, from its size).</summary>
+        public void PlayHurt(Vector3 position, float pitch = 1f) => Play(_hurt, position, 0.8f, pitch * Random.Range(0.95f, 1.05f));
         public void PlayBolt(Vector3 position) => Play(_bolt, position, 0.8f, Random.Range(0.95f, 1.05f));
         public void PlayShieldHit(Vector3 position) => Play(_shieldHit, position, 1f, 1f);
         public void PlayGuard(Vector3 position) => Play(_guard, position, 0.8f, 1f);
@@ -89,6 +100,10 @@ namespace Ricochet.Audio
         /// <summary>A damage tick as light lands in the creature: the combo scale again, an octave up and softer.</summary>
         public void PlayTick(int index, Vector3 position) =>
             Play(_notes[Mathf.Clamp(index + 5, 0, ScaleNotes - 1)], position, 0.45f, 1f);
+
+        /// <summary>A crystal landing as the board spills out of the rift: soft, rising up the scale.</summary>
+        public void PlaySeed(int index, Vector3 position) =>
+            Play(_notes[Mathf.Min(index, ScaleNotes - 1)], position, 0.18f, 1f);
 
         void Update()
         {
@@ -120,6 +135,18 @@ namespace Ricochet.Audio
         public void PlayCancel(Vector3 position) => Play(_cancel, position, 0.4f, 1f);
         /// <summary>The Fever swell: a bright rising sweep under the shattering wave.</summary>
         public void PlaySwell(Vector3 position) => Play(_swell, position, 0.8f, 1f);
+
+        /// <summary>The rift zipping shut, then the pop as it closes.</summary>
+        public void PlayZip(Vector3 position) => Play(_zip, position, 0.8f, 1f);
+        public void PlaySealPop(Vector3 position) => Play(_sealPop, position, 0.9f, 1f);
+
+        /// <summary>The creature drawing back before its move: a rising rumble, so the telegraph is heard too.</summary>
+        public void PlayGrowl(Vector3 position, float pitch = 1f) => Play(_growl, position, 0.7f, pitch * Random.Range(0.96f, 1.04f));
+        /// <summary>The creature coming out of the rift: a falling whoosh.</summary>
+        public void PlayEmerge(Vector3 position, float pitch = 1f) => Play(_emerge, position, 0.75f, pitch);
+
+        /// <summary>The creature breaking apart along its cracks.</summary>
+        public void PlayShatter(Vector3 position) => Play(_shatter, position, 1f, Random.Range(0.96f, 1.04f));
 
         public void PlayChord(Vector3 position)
         {

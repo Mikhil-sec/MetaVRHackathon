@@ -71,7 +71,7 @@ namespace Ricochet.Gameplay
     public static class Upgrades
     {
         public const int MendAmount = 15;
-        public const float GlyphRelic = 8f, GlyphMend = 9f, GlyphCrown = 10f, GlyphPip = 11f;
+        public const float GlyphRelic = 8f, GlyphMend = 9f, GlyphCrown = 10f, GlyphPip = 11f, GlyphAscension = 23f;
         public static readonly Color RelicColor = new(1f, 0.78f, 0.38f);
         public static readonly Color MendColor = new(0.45f, 0.85f, 1f);
 
@@ -165,6 +165,9 @@ namespace Ricochet.Gameplay
         /// Fills three distinct rewards: at least one new Spark type and one relic while any are left, and a Mend
         /// in place of the third when the shield is low. Returns how many were filled.
         /// </summary>
+        public static Reward GiftSpark(System.Random rng) => new(SparkPool[rng.Next(SparkPool.Length)]);
+        public static Reward GiftRelic(System.Random rng) => new(RelicPool[rng.Next(RelicPool.Length)]);
+
         public static int Offer(RunState run, System.Random rng, Reward[] into)
         {
             int n = 0;

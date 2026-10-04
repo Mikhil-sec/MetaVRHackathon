@@ -7,7 +7,9 @@
         "meta.xr.mrutilitykit",
         "Unity.RenderPipelines.Universal.Runtime",
         "Unity.InputSystem",
-        "Unity.TextMeshPro"
+        "Unity.TextMeshPro",
+        "Meta.XR.Audio",
+        "Oculus.Platform"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

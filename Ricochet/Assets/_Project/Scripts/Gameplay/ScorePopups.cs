@@ -40,14 +40,19 @@ namespace Ricochet.Gameplay
                 var go = new GameObject("Popup" + i);
                 go.transform.SetParent(transform, false);
                 var text = go.AddComponent<TextMeshPro>();
+                text.fontStyle = FontStyles.Bold;
+                UiFonts.Use(text, true);
                 text.fontSize = 10f; // 10 pt ~ 1 world unit line height; the transform scale sets the real size
                 text.alignment = TextAlignmentOptions.Center;
                 text.textWrappingMode = TextWrappingModes.NoWrap;
-                text.fontStyle = FontStyles.Bold;
                 text.rectTransform.sizeDelta = new Vector2(4f, 1.2f);
                 // A dark outline keeps the number readable over any real room (one material instance per popup).
                 text.outlineWidth = 0.25f;
                 text.outlineColor = new Color32(20, 10, 40, 255);
+                // Warm TMP's buffers now (its parse stacks and mesh arrays are allocated on first use), so the first
+                // big chain mid-run doesn't hitch the GC.
+                text.SetText("+{0}", 88888);
+                text.ForceMeshUpdate(true, true);
                 go.SetActive(false);
                 _pool[i].Text = text;
             }

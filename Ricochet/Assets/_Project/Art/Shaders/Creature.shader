@@ -1,6 +1,9 @@
 // Creature: "ink and light" (CONCEPT section 6). An opaque ink body that reads as a silhouette over passthrough,
 // a magenta fresnel rim, and a slow vertex wobble so it feels alive. Per-renderer _Flash (hurt: white-hot) and
 // _Tint (the telegraph color of its next move) come through the instancing buffer. Unlit cost.
+// Damage cracks it: a Voronoi network fixed in the body opens cell by cell with _Hurt (fraction of HP lost), so light
+// leaks through the ink as it weakens; _Crack makes them blaze (hits, the death seizure) and _Dissolve breaks it apart
+// along them (cells vanish with glowing edges). All three are 0 for a fresh creature, which skips that work.
 Shader "Ricochet/Creature"
 {
     Properties
@@ -41,6 +44,9 @@ Shader "Ricochet/Creature"
                 UNITY_DEFINE_INSTANCED_PROP(float4, _Tint)
                 UNITY_DEFINE_INSTANCED_PROP(float, _Flash)
                 UNITY_DEFINE_INSTANCED_PROP(float, _Energy)
+                UNITY_DEFINE_INSTANCED_PROP(float, _Hurt)
+                UNITY_DEFINE_INSTANCED_PROP(float, _Crack)
+                UNITY_DEFINE_INSTANCED_PROP(float, _Dissolve)
             UNITY_INSTANCING_BUFFER_END(Props)
 
             float Hash(float3 p)
@@ -60,6 +66,27 @@ Shader "Ricochet/Creature"
                 float d = length(q - centre);
                 float twinkle = 0.6 + 0.4 * sin(t * (2.0 + 3.0 * h) + h * 40.0);
                 return step(0.8, h) * saturate(1.0 - d * 2.8) * twinkle;
+            }
+
+            // Voronoi edge distance (F2 - F1, cell units) and the nearest cell's hash.
+            float CellEdge(float3 p, out float cellHash)
+            {
+                float3 cell = floor(p);
+                float3 f = p - cell;
+                float d1 = 8.0, d2 = 8.0;
+                cellHash = 0.0;
+                [unroll] for (int z = -1; z <= 1; z++)
+                [unroll] for (int y = -1; y <= 1; y++)
+                [unroll] for (int x = -1; x <= 1; x++)
+                {
+                    float3 g = float3(x, y, z);
+                    float h = Hash(cell + g);
+                    float3 r = g + frac(h * float3(1.0, 17.13, 131.7)) * 0.8 + 0.1 - f;
+                    float d = dot(r, r);
+                    if (d < d1) { d2 = d1; d1 = d; cellHash = h; }
+                    else if (d < d2) { d2 = d; }
+                }
+                return sqrt(d2) - sqrt(d1);
             }
 
             struct Attributes
@@ -126,7 +153,30 @@ Shader "Ricochet/Creature"
                 float band = frac(i.posOS.y * 3.2 - t * (0.35 + 1.4 * energy));
                 band = pow(1.0 - abs(band * 2.0 - 1.0), 10.0);
                 rgb += tint.rgb * band * (0.18 + 0.9 * energy) * (0.3 + 0.7 * facing);
-                rgb = lerp(rgb, float3(1.0, 0.9, 1.0) * 1.4, flash);
+                // A hit flares the silhouette white-hot and lifts the face less, so the creature keeps its form.
+                rgb = lerp(rgb, float3(1.0, 0.9, 1.0) * 1.4, flash * (0.35 + 0.65 * fresnel));
+
+                float hurt = UNITY_ACCESS_INSTANCED_PROP(Props, _Hurt);
+                float crack = UNITY_ACCESS_INSTANCED_PROP(Props, _Crack);
+                float dissolve = UNITY_ACCESS_INSTANCED_PROP(Props, _Dissolve);
+                if (hurt + crack + dissolve > 0.001)
+                {
+                    float cellHash;
+                    float e = CellEdge(i.posOS * 4.5, cellHash);
+                    // Breaking apart: whole cells drop out; the ones about to go burn along their edges.
+                    clip(cellHash - dissolve * 1.02);
+                    float going = dissolve > 0.0 ? saturate(1.0 - (cellHash - dissolve) / 0.15) : 0.0;
+                    // A cell's edges crack open once the damage passes its hash; cracks widen a little as it weakens.
+                    float open = saturate((hurt - cellHash) * 12.0) * saturate(hurt * 4.0);
+                    open = max(open, max(crack * 0.85, going));
+                    float aa = fwidth(e) * 1.2;
+                    float width = 0.035 + 0.035 * hurt + 0.05 * going;
+                    float seam = 1.0 - smoothstep(width - aa, width + aa, e);
+                    float bleed = exp(-e * 14.0) * 0.35;
+                    float heat = 1.0 + 2.5 * crack + 1.5 * flash + 2.0 * going;
+                    float3 crackColor = lerp(lerp(_RimColor.rgb, tint.rgb, 0.3), float3(1.0, 0.95, 0.9), saturate(seam * 0.6 + crack * 0.4));
+                    rgb += crackColor * (seam * 1.6 + bleed) * open * heat;
+                }
                 return half4(rgb, 1.0);
             }
             ENDHLSL

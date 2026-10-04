@@ -158,6 +158,107 @@ namespace Ricochet.Audio
             return clip;
         }
 
+        /// <summary>
+        /// A zipper of light: a train of tiny high-passed clicks (the teeth meeting) whose rate climbs from ~28 to
+        /// ~110 per second, over a whistle rising two octaves. It stops dead at the end (the seal pop follows).
+        /// </summary>
+        public static AudioClip Zip(string name, float seconds = 0.55f, int seed = 51)
+        {
+            int samples = Mathf.CeilToInt(seconds * SampleRate);
+            var data = new float[samples];
+            var rng = new System.Random(seed);
+            float clickPhase = 1f, clickEnv = 0f, lp = 0f, phase = 0f;
+            float clickDecay = Mathf.Exp(-1f / (0.004f * SampleRate));
+            for (int i = 0; i < samples; i++)
+            {
+                float t = (float)i / SampleRate;
+                float k = t / seconds;
+                clickPhase += Mathf.Lerp(28f, 110f, k * k) / SampleRate;
+                if (clickPhase >= 1f) { clickPhase -= 1f; clickEnv = 0.6f + 0.4f * (float)rng.NextDouble(); }
+                clickEnv *= clickDecay;
+                float n = (float)(rng.NextDouble() * 2.0 - 1.0);
+                lp += 0.15f * (n - lp);
+                float click = (n - lp) * clickEnv;
+                phase += 2f * Mathf.PI * 500f * Mathf.Pow(4f, k) / SampleRate;
+                float whistle = Mathf.Sin(phase) * 0.22f * k;
+                float env = Mathf.Clamp01(t / 0.02f) * Mathf.Clamp01((seconds - t) / 0.01f);
+                data[i] = (click * 0.9f + whistle) * env * 0.5f;
+            }
+            var clip = AudioClip.Create(name, samples, 1, SampleRate, false);
+            clip.SetData(data, 0);
+            return clip;
+        }
+
+        /// <summary>
+        /// Something made of light breaking: a low boom falling an octave, a short noise burst, and a spray of glassy
+        /// pings (short high partials at scattered onsets, densest at the start).
+        /// </summary>
+        public static AudioClip Shatter(string name, float seconds = 1.6f, int seed = 41)
+        {
+            const int Pings = 18;
+            int samples = Mathf.CeilToInt(seconds * SampleRate);
+            var data = new float[samples];
+            var rng = new System.Random(seed);
+            var onset = new float[Pings];
+            var freq = new float[Pings];
+            var amp = new float[Pings];
+            var decay = new float[Pings];
+            for (int p = 0; p < Pings; p++)
+            {
+                float r = (float)rng.NextDouble();
+                onset[p] = 0.3f * r * r;
+                freq[p] = 1800f + 3400f * (float)rng.NextDouble();
+                amp[p] = 0.3f + 0.7f * (float)rng.NextDouble();
+                decay[p] = 18f + 22f * (float)rng.NextDouble();
+            }
+            float lp = 0f, boomPhase = 0f;
+            for (int i = 0; i < samples; i++)
+            {
+                float t = (float)i / SampleRate;
+                boomPhase += 2f * Mathf.PI * 70f * Mathf.Pow(0.5f, t / 0.6f) / SampleRate;
+                float boom = Mathf.Sin(boomPhase) * Mathf.Exp(-3f * t) * 0.9f;
+                float n = (float)(rng.NextDouble() * 2.0 - 1.0);
+                lp += 0.2f * (n - lp);
+                float burst = (n - lp) * Mathf.Exp(-14f * t) * 0.5f;
+                float pings = 0f;
+                for (int p = 0; p < Pings; p++)
+                {
+                    float u = t - onset[p];
+                    if (u > 0f) pings += Mathf.Sin(2f * Mathf.PI * freq[p] * u) * amp[p] * Mathf.Exp(-decay[p] * u);
+                }
+                float env = Mathf.Clamp01(t / 0.003f) * Mathf.Clamp01((seconds - t) / 0.05f);
+                data[i] = (boom + burst + pings * 0.22f) * env * 0.45f;
+            }
+            var clip = AudioClip.Create(name, samples, 1, SampleRate, false);
+            clip.SetData(data, 0);
+            return clip;
+        }
+
+        /// <summary>
+        /// The rift's hum: a low root and fifth with slowly beating detuned partners, a faint airy overtone and a slow
+        /// breath. Every frequency completes a whole number of cycles in the clip, so it loops without a seam.
+        /// </summary>
+        public static AudioClip Drone(string name, float seconds = 4f)
+        {
+            int samples = Mathf.RoundToInt(seconds * SampleRate);
+            var data = new float[samples];
+            // Cycles per loop (frequency = cycles / seconds): 55 Hz root, a partner 0.25 Hz off, the fifth, the octave
+            // a hair sharp, a high overtone; the breath (amplitude) cycles twice per loop.
+            float[] cycles = { 220f, 221f, 330f, 442f, 3522f };
+            float[] gains = { 0.5f, 0.35f, 0.3f, 0.18f, 0.025f };
+            for (int i = 0; i < samples; i++)
+            {
+                float k = (float)i / samples;
+                float s = 0f;
+                for (int p = 0; p < cycles.Length; p++) s += gains[p] * Mathf.Sin(2f * Mathf.PI * cycles[p] * k + p);
+                float breath = 0.75f + 0.25f * Mathf.Sin(2f * Mathf.PI * 2f * k);
+                data[i] = s * breath * 0.35f;
+            }
+            var clip = AudioClip.Create(name, samples, 1, SampleRate, false);
+            clip.SetData(data, 0);
+            return clip;
+        }
+
         /// <summary>A bright, long crash: high-passed noise plus a shimmer of inharmonic partials.</summary>
         public static AudioClip Crash(string name, float seconds = 2.2f)
         {

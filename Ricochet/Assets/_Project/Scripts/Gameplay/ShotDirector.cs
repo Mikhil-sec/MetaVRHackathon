@@ -91,6 +91,15 @@ namespace Ricochet.Gameplay
         public event System.Action BoardGenerated;
         /// <summary>A lit crystal popped at shot end: (position, chain value = its hit index + 1).</summary>
         public event System.Action<Vector3, int> CrystalPopped;
+        /// <summary>A relic just acted (relic, where): the HUD punches its glyph and shows it at the spot.</summary>
+        public event System.Action<Relic, Vector3> RelicTriggered;
+
+        /// <summary>Reports a relic's moment (also used by the encounter, e.g. Thornlight's reply).</summary>
+        public void TriggerRelic(Relic relic, Vector3 at)
+        {
+            Debug.Log($"[Ricochet] Relic: {relic}");
+            RelicTriggered?.Invoke(relic, at);
+        }
 
         /// <summary>Optional: runs once the room is ready, before the first board and arming (the encounter intro).</summary>
         public System.Func<IEnumerator> Intro;
@@ -113,6 +122,7 @@ namespace Ricochet.Gameplay
         void OnEnable()
         {
             _playArea.Ready += OnRoomReady;
+            _playArea.Reseated += OnReseated;
             Subscribe(_spark, true);
             for (int i = 0; i < _children.Length; i++) if (_children[i] != null) Subscribe(_children[i], true);
             _sling.Launched += OnLaunched;
@@ -121,6 +131,7 @@ namespace Ricochet.Gameplay
         void OnDisable()
         {
             _playArea.Ready -= OnRoomReady;
+            _playArea.Reseated -= OnReseated;
             Subscribe(_spark, false);
             for (int i = 0; i < _children.Length; i++) if (_children[i] != null) Subscribe(_children[i], false);
             _sling.Launched -= OnLaunched;
@@ -164,12 +175,27 @@ namespace Ricochet.Gameplay
             BestCombo = bestCombo;
         }
 
-        void OnRoomReady()
+        void PlaceSling()
         {
             _sling.transform.position = SlingPosition(_playArea.Seat);
             // Face the seat's forward so the band's posts sit left and right of the player (SlingFx).
             Vector3 flat = Vector3.ProjectOnPlane(_playArea.Seat.forward, Vector3.up);
             if (flat.sqrMagnitude > 1e-4f) _sling.transform.rotation = Quaternion.LookRotation(flat);
+        }
+
+        void OnReseated() => StartCoroutine(PlaceSlingWhenFree());
+
+        // A pull in progress keeps its sling; it moves the moment the hand lets go (the shot launches from the old one).
+        IEnumerator PlaceSlingWhenFree()
+        {
+            while (_sling.IsPulling) yield return null;
+            PlaceSling();
+            Debug.Log($"[Ricochet] Sling re-seated at {_sling.transform.position:F2}");
+        }
+
+        void OnRoomReady()
+        {
+            PlaceSling();
 
             if (_leftHand != null) _sling.AddInput(new HandPinchInput(_leftHand));
             if (_rightHand != null) _sling.AddInput(new HandPinchInput(_rightHand));
@@ -222,6 +248,9 @@ namespace Ricochet.Gameplay
         /// <summary>A fresh board in the same room (it reveals as a cascade).</summary>
         public void RegenerateBoard() => NewBoard();
 
+        /// <summary>The next board's seed (later boards in the encounter follow on from it).</summary>
+        public void SeedBoards(int seed) => _boardSeed = seed;
+
         void NewBoard()
         {
             int count = _board.Generate(_playArea.Room, _playArea.Seat, _boardSeed++, HeroShot(_playArea.Seat));
@@ -270,8 +299,12 @@ namespace Ricochet.Gameplay
             Vector3 at = crystal.transform.position;
             bool focused = _focus != null && crystal == _focus.Focused;
             int crit = (crystal.Kind == CrystalKind.Gold ? 2 : 1) * (focused ? (Has(Relic.ThirdEye) ? 3 : 2) : 1);
-            bool relicCrit = (!_anyHit && Has(Relic.FirstLight)) || _skyCrit;
+            bool firstLight = !_anyHit && Has(Relic.FirstLight);
+            bool relicCrit = firstLight || _skyCrit;
             if (relicCrit) crit *= 2;
+            if (firstLight) TriggerRelic(Relic.FirstLight, at);
+            if (_skyCrit) TriggerRelic(Relic.Skylight, at);
+            if (focused && Has(Relic.ThirdEye)) TriggerRelic(Relic.ThirdEye, at);
             _skyCrit = false;
             _anyHit = true;
             int value = NextHitValue * crit;
@@ -309,6 +342,7 @@ namespace Ricochet.Gameplay
                     break;
                 case CrystalKind.Amp:
                     _mult += Has(Relic.Resonance) ? 2 : 1;
+                    if (Has(Relic.Resonance)) TriggerRelic(Relic.Resonance, at);
                     _sfx.PlayGuard(at);
                     if (_glow != null) _glow.Pulse(at, _ampGlow, 1.6f, 0.7f);
                     if (_fx != null) _fx.Burst(at, _ampGlow);
@@ -319,6 +353,7 @@ namespace Ricochet.Gameplay
                     break;
                 case CrystalKind.Bomb:
                     Detonate(spark, at, crystal, _bombRadius * (Has(Relic.BigBang) ? _bigBangScale : 1f));
+                    if (Has(Relic.BigBang)) TriggerRelic(Relic.BigBang, at);
                     break;
             }
 
@@ -329,6 +364,7 @@ namespace Ricochet.Gameplay
                 Debug.Log("[Ricochet] Bomb Spark burst");
                 Detonate(spark, spark.transform.position, null,
                          _sparkBombRadius * (Has(Relic.BigBang) ? _bigBangScale : 1f));
+                if (Has(Relic.BigBang)) TriggerRelic(Relic.BigBang, spark.transform.position);
             }
         }
 
@@ -372,6 +408,7 @@ namespace Ricochet.Gameplay
                 _carom++;
                 _sfx.PlayPullTick(_carom, point);
                 if (_glow != null) _glow.Pulse(point, Upgrades.RelicColor * 1.2f, 0.7f, 0.35f);
+                TriggerRelic(Relic.Carom, point);
             }
             if (spark.LastBounceLabel == Meta.XR.MRUtilityKit.MRUKAnchor.SceneLabels.CEILING && Has(Relic.Skylight))
             {
@@ -383,6 +420,7 @@ namespace Ricochet.Gameplay
                 _sfx.PlayChord(point); // Second Wind: the floor gives it back
                 if (_glow != null) _glow.Pulse(point, _ampGlow, 1.2f, 0.6f);
                 if (_fx != null) _fx.Burst(point, _ampGlow);
+                TriggerRelic(Relic.SecondWind, point);
             }
             if (spark == _spark && spark.Kind == SparkKind.Splitter && !_split) Split(spark, point, normal);
         }

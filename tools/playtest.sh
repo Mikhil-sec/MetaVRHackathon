@@ -14,7 +14,7 @@ u clear_console >/dev/null
 u editor_play >/dev/null
 sleep 8
 for w in $(seq 1 10); do ev "return \"alive\";" | grep -q alive && break; sleep 2; done
-ev 'UnityEngine.Application.runInBackground = true; UnityEditor.EditorApplication.isPaused = false; return "frame=" + UnityEngine.Time.frameCount;'
+ev 'UnityEngine.Application.runInBackground = true; UnityEditor.EditorApplication.isPaused = false; if (Ricochet.Gameplay.AssistAim.Enabled) Ricochet.Gameplay.AssistAim.Set(false); return "frame=" + UnityEngine.Time.frameCount;'
 
 for i in $(seq 1 "$SHOTS"); do
   # Wait until the sling is ready again, then fire at a random upward-forward angle.

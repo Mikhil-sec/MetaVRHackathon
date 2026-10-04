@@ -126,6 +126,13 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Ricochet.Runtime::Ricochet.Gameplay.Crystal
   _renderer: {fileID: 5669510057661775428}
+  _filter: {fileID: 6506244831140898324}
+  _kindMeshes:
+  - {fileID: 4300000, guid: 6f410bcc02d20004a8168d5cd83c1bf5, type: 2}
+  - {fileID: 4300000, guid: 957e2d292c71ef74bba5cfdc5f721761, type: 2}
+  - {fileID: 4300000, guid: 402bb3d092892704e98ab539a7cdbdb1, type: 2}
+  - {fileID: 4300000, guid: 3b0efb19480d12741a5f6a344d9dcf8d, type: 2}
+  - {fileID: 4300000, guid: 4e6370704e7d4d340a24128a2e268e07, type: 2}
   _idleColor: {r: 0.55, g: 0.35, b: 1, a: 1}
   _litColor: {r: 1, g: 0.8, b: 0.35, a: 1}
   _corruptColor: {r: 0.55, g: 0.04, b: 0.16, a: 1}

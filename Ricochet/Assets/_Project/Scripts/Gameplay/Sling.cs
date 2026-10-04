@@ -12,7 +12,8 @@ namespace Ricochet.Gameplay
     /// </summary>
     public sealed class Sling : MonoBehaviour
     {
-        enum State { Empty, Ready, Pulling }
+        enum State { Empty, Arriving, Ready, Pulling }
+        const float ArriveSeconds = 0.9f;
 
         [Header("Refs")]
         [SerializeField] Spark _spark;
@@ -45,12 +46,28 @@ namespace Ricochet.Gameplay
         public event Action<Vector3> Launched;
         public event Action Grabbed;
         public event Action Cancelled;
+        /// <summary>The Spark flown in by <see cref="ArriveFrom"/> has settled in the band.</summary>
+        public event Action Arrived;
+
+        /// <summary>Set before <see cref="Arm"/>: the Spark flies in from here (the rift) instead of appearing in place.</summary>
+        public Vector3? ArriveFrom { get; set; }
+        Vector3 _arriveFrom;
+        float _arrive;
+
+        /// <summary>
+        /// Accessibility (AssistAim): while this returns a point, a pinch anywhere (out of the sling's reach) draws a
+        /// shot solved to hit it; the band pulls itself back and the release fires. A pinch at the sling stays manual.
+        /// </summary>
+        public Func<Vector3?> AssistTarget;
+        bool _assisted;
+        float _assistDraw;
 
         public float PullFraction => _state == State.Pulling ? Mathf.Clamp01(_smoothedPull.magnitude / _maxPull) : 0f;
 
         // Read-only state for the feedback layer (SlingFx).
         public IReadOnlyList<IPinchInput> Inputs => _inputs;
         public bool IsReady => _state == State.Ready;
+        public bool IsArriving => _state == State.Arriving;
         public bool IsPulling => _state == State.Pulling;
         public float GrabRadius => _grabRadius;
         /// <summary>The input holding the Spark while pulling, else null.</summary>
@@ -72,17 +89,48 @@ namespace Ricochet.Gameplay
         }
 
         /// <summary>Loads the Spark onto the sling so it can be grabbed.</summary>
+        // Nothing sits in the sling until the first Arm (the cold open flies it in from the rift).
+        void Start()
+        {
+            if (_state == State.Empty) _spark.SetVisible(false);
+        }
+
         public void Arm()
         {
-            _state = State.Ready;
             _spark.gameObject.SetActive(true);
+            _spark.SetVisible(true);
+            if (ArriveFrom.HasValue)
+            {
+                _arriveFrom = ArriveFrom.Value;
+                ArriveFrom = null;
+                _arrive = 0f;
+                _state = State.Arriving;
+                _spark.Glide(_arriveFrom, true);
+                return;
+            }
+            _state = State.Ready;
             _spark.Hold(transform.position);
+        }
+
+        void UpdateArriving()
+        {
+            // Out of the rift fast, then settling into the band along a gentle arc (ease-out cubic).
+            _arrive = Mathf.Min(1f, _arrive + Time.deltaTime / ArriveSeconds);
+            float e = 1f - Mathf.Pow(1f - _arrive, 3f), u = 1f - e;
+            Vector3 to = transform.position;
+            Vector3 control = (_arriveFrom + to) * 0.5f + Vector3.up * (0.15f + 0.08f * Vector3.Distance(_arriveFrom, to));
+            _spark.Glide(u * u * _arriveFrom + 2f * u * e * control + e * e * to, false);
+            if (_arrive < 1f) return;
+            _spark.Hold(to);
+            _state = State.Ready;
+            Arrived?.Invoke();
         }
 
         void Update()
         {
             switch (_state)
             {
+                case State.Arriving: UpdateArriving(); break;
                 case State.Ready: UpdateReady(); break;
                 case State.Pulling: UpdatePulling(); break;
             }
@@ -113,9 +161,11 @@ namespace Ricochet.Gameplay
                 if (!pinchStarted) continue;
 
                 bool inReach = Vector3.Distance(input.PinchPoint, transform.position) <= _grabRadius * input.ReachScale;
-                if (!inReach) continue;
+                _assisted = !inReach && AssistTarget?.Invoke() != null;
+                if (!inReach && !_assisted) continue;
 
                 _active = input;
+                _assistDraw = 0f;
                 _smoothedPull = Vector3.zero;
                 _historyCount = 0;
                 _lostTime = 0f;
@@ -129,6 +179,7 @@ namespace Ricochet.Gameplay
 
         void UpdatePulling()
         {
+            if (_assisted) { UpdateAssisted(); return; }
             if (!_active.IsTracked)
             {
                 _lostTime += Time.deltaTime;
@@ -166,6 +217,79 @@ namespace Ricochet.Gameplay
                 return;
             }
             RecordPull();
+        }
+
+        void UpdateAssisted()
+        {
+            if (!_active.IsTracked)
+            {
+                _lostTime += Time.deltaTime;
+                if (_lostTime > _trackingGrace) Cancel();
+                return;
+            }
+            _lostTime = 0f;
+            Vector3? target = AssistTarget?.Invoke();
+            if (!target.HasValue) { Cancel(); return; } // the assist went off, or no crystal is in focus
+
+            // The band draws itself back along the solved aim over a third of a second (the gesture's feedback).
+            SolveShot(target.Value, out Vector3 aim, out float pull01);
+            _assistDraw = Mathf.MoveTowards(_assistDraw, 1f, Time.deltaTime / 0.35f);
+            float draw = _assistDraw * _assistDraw * (3f - 2f * _assistDraw);
+            Vector3 want = aim * (Mathf.Lerp(_minPull, _maxPull, pull01) * draw);
+            _smoothedPull = Vector3.Lerp(_smoothedPull, want, 1f - Mathf.Exp(-_aimSmoothing * Time.deltaTime));
+            _spark.Hold(transform.position - _smoothedPull);
+            if (_preview != null) _preview.Show(_spark.transform.position, VelocityFor(aim, pull01));
+
+            if (_active.IsPinching) return;
+            if (_assistDraw >= 0.3f) FireAt(target.Value, "assist", true); // even a quick pinch counts
+            else Cancel();
+        }
+
+        /// <summary>
+        /// Accessibility (AssistAim): fire a shot solved to hit this point. "dwell" from looking alone, "assist" from a
+        /// pinch anywhere. Returns false when the sling has no Spark ready.
+        /// </summary>
+        public bool FireAt(Vector3 target, string how, bool fromPull = false)
+        {
+            if (_state != State.Ready && !(fromPull && _state == State.Pulling)) return false;
+            bool reachable = SolveShot(target, out Vector3 aim, out float pull01);
+            _smoothedPull = aim * Mathf.Lerp(_minPull, _maxPull, pull01);
+            _spark.Hold(transform.position - _smoothedPull); // where a hand release starts
+            Debug.Log($"[Ricochet] Launch ({how}): dir {aim:F2}, pull {pull01:F2}{(reachable ? "" : ", out of reach")}");
+            Fire(VelocityFor(aim, pull01));
+            return true;
+        }
+
+        /// <summary>
+        /// The low-arc aim that lands the Spark on a point (its custom gravity, no drag), at a strong pull. The launch
+        /// point depends on the aim (the Spark sits pulled back along it), so it is refined a few times.
+        /// Returns false when the point is out of range (then: full pull at 45 degrees toward it).
+        /// </summary>
+        public bool SolveShot(Vector3 target, out Vector3 aim, out float pull01)
+        {
+            const float pull = 0.9f;
+            float g = Mathf.Max(0.01f, _spark.GravityAcceleration);
+            float v = Mathf.Lerp(_minSpeed, _maxSpeed, pull), v2 = v * v;
+            pull01 = pull;
+            aim = (target - transform.position).normalized;
+            for (int i = 0; i < 3; i++)
+            {
+                Vector3 d = target - LaunchPoint(transform.position, aim, pull01);
+                Vector3 flat = Vector3.ProjectOnPlane(d, Vector3.up);
+                float x = flat.magnitude, y = d.y;
+                if (x < 1e-3f) { aim = d.normalized; return true; }
+                flat /= x;
+                float disc = v2 * v2 - g * (g * x * x + 2f * y * v2);
+                if (disc < 0f)
+                {
+                    pull01 = 1f;
+                    aim = (flat + Vector3.up).normalized;
+                    return false;
+                }
+                float theta = Mathf.Atan((v2 - Mathf.Sqrt(disc)) / (g * x));
+                aim = (flat * Mathf.Cos(theta) + Vector3.up * Mathf.Sin(theta)).normalized;
+            }
+            return true;
         }
 
         void RecordPull()
@@ -218,6 +342,7 @@ namespace Ricochet.Gameplay
         void Fire(Vector3 velocity)
         {
             _state = State.Empty;
+            _assisted = false;
             if (_preview != null) _preview.Hide();
             _spark.Launch(velocity);
             Launched?.Invoke(velocity);
@@ -225,6 +350,7 @@ namespace Ricochet.Gameplay
 
         void Cancel()
         {
+            _assisted = false;
             if (_preview != null) _preview.Hide();
             _smoothedPull = Vector3.zero;
             _state = State.Ready;

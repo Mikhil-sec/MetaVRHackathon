@@ -74,8 +74,9 @@ namespace Ricochet.EditorTools
             PlayerSettings.SetMobileMTRendering(android, true);
             PlayerSettings.gpuSkinning = true;
             PlayerSettings.stereoRenderingPath = StereoRenderingPath.Instancing;
+            PlayerSettings.gcIncremental = true; // event-time garbage (a new board, a save) is time-sliced, never a hitch
             EditorUserBuildSettings.androidBuildSubtarget = MobileTextureSubtarget.ASTC;
-            log.AppendLine("Player: IL2CPP, ARM64, Vulkan, Linear, minSdk 32, ASTC, multiview");
+            log.AppendLine("Player: IL2CPP, ARM64, Vulkan, Linear, minSdk 32, ASTC, multiview, incremental GC");
         }
 
         static void ConfigureQuality(StringBuilder log)

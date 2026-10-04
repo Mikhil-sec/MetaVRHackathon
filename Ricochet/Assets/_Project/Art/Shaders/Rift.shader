@@ -26,6 +26,7 @@ Shader "Ricochet/Rift"
             float4 _Color;
             float _Intensity;
             float _Open;
+            float _Zip;
             float4 _VoidColor;
             float4 _NebulaColor;
         CBUFFER_END
@@ -57,6 +58,15 @@ Shader "Ricochet/Rift"
         }
 
         float Ends(float2 uv) { return smoothstep(0.0, 0.12, uv.y) * smoothstep(1.0, 0.88, uv.y); }
+
+        // Sealing (_Zip 0..1, < 0 = not sealing): below the front the crack is shut; just above it the opening tapers
+        // to nothing, like teeth meeting. Returns how open the crack is at this height (0 shut .. 1 fully open).
+        float ZipOpen(float y)
+        {
+            if (_Zip < 0.0) return 1.0;
+            float front = _Zip * 1.16 - 0.08;
+            return saturate((y - front) / 0.22);
+        }
         ENDHLSL
 
         Pass
@@ -94,7 +104,9 @@ Shader "Ricochet/Rift"
             {
                 float across = 1.0 - abs(i.uv.x * 2.0 - 1.0);
                 // The void fills the inner crack; the lips (outer third) stay light-only in the glow pass.
-                float inside = smoothstep(0.25, 0.55, across) * Ends(i.uv) * saturate(_Open * 1.5);
+                float zo = ZipOpen(i.uv.y);
+                float lo = lerp(1.02, 0.25, zo);  // the void narrows to nothing toward the zip front
+                float inside = smoothstep(lo, lo + 0.3, across) * Ends(i.uv) * saturate(_Open * 1.5);
                 if (inside <= 0.001) discard;
 
                 // Rift frame in metres: right/up along the wall, out = toward the room.
@@ -146,6 +158,20 @@ Shader "Ricochet/Rift"
                 float crawl = 0.7 + 0.3 * sin(i.uv.y * 23.0 - t * 5.0) * sin(i.uv.y * 9.0 + t * 3.1);
                 float shimmer = 0.9 + 0.1 * sin(t * 37.0 + i.uv.y * 61.0);
                 float3 rgb = (_Color.rgb * (lips * 1.4 + body) * crawl + lips * lips * 0.6) * shimmer * Ends(i.uv);
+                if (_Zip >= 0.0)
+                {
+                    // Zipping: the lips follow the taper toward the seam; the shut part is a fading scar line; a
+                    // white-hot bead runs up the front.
+                    float zo = ZipOpen(i.uv.y);
+                    float centre = lerp(0.98, 0.28, zo);
+                    float zlips = exp(-pow((across - centre) / lerp(0.05, 0.14, zo), 2.0));
+                    float front = _Zip * 1.16 - 0.08;
+                    float behind = saturate(front - i.uv.y);
+                    float scar = pow(across, 10.0) * exp(-behind * 5.0) * step(i.uv.y, front);
+                    float bead = exp(-abs(i.uv.y - front) * 28.0) * pow(across, 4.0);
+                    rgb = (_Color.rgb * (zlips * 1.4 + body * zo) * crawl + zlips * zlips * 0.6) * shimmer * Ends(i.uv)
+                        + (_Color.rgb * 0.8 + 0.4) * scar + float3(1.0, 0.92, 1.0) * bead * 3.0;
+                }
                 return half4(rgb * _Intensity * _Open, 0.0);
             }
             ENDHLSL

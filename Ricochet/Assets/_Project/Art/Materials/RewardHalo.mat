@@ -25,8 +25,11 @@ Material:
     m_TexEnvs: []
     m_Ints: []
     m_Floats:
+    - _Breathe: 0
     - _Falloff: 2.2
     - _Intensity: 0.6
+    - _Star: 0
+    - _Twinkle: 0
     m_Colors:
     - _Color: {r: 1, g: 1, b: 1, a: 1}
   m_BuildTextureStacks: []

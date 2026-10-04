@@ -206,6 +206,25 @@ namespace Ricochet.Gameplay
             _stretch = 1f; // spring back from round, not from the pre-impact stretch
         }
 
+        /// <summary>
+        /// Shows or hides the Spark's look (body, halo) without touching its physics: the board's flight predictions
+        /// simulate this body even before the first Spark is armed.
+        /// </summary>
+        public void SetVisible(bool visible)
+        {
+            if (_visual != null) _visual.gameObject.SetActive(visible);
+            if (_halo != null) _halo.gameObject.SetActive(visible);
+        }
+
+        /// <summary>Kinematic placement like <see cref="Hold"/>, but trailing its ribbon (flying into the sling).</summary>
+        public void Glide(Vector3 position, bool start)
+        {
+            Hold(position);
+            if (_ribbon == null) return;
+            if (start) _ribbon.Clear();
+            _ribbon.Emitting = true;
+        }
+
         /// <summary>Kinematic placement while held in the sling.</summary>
         public void Hold(Vector3 position)
         {

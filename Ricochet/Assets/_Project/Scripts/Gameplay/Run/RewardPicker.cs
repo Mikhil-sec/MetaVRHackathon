@@ -22,6 +22,7 @@ namespace Ricochet.Gameplay
         static readonly int ColorId = Shader.PropertyToID("_Color");
         static readonly int KindId = Shader.PropertyToID("_Kind");
         static readonly int IntensityId = Shader.PropertyToID("_Intensity");
+        static readonly int RadiusId = Shader.PropertyToID("_Radius");
 
         [SerializeField] PlayArea _playArea;
         [SerializeField] Sling _sling;
@@ -33,6 +34,7 @@ namespace Ricochet.Gameplay
         [SerializeField] Material _haloMaterial;
         [SerializeField] Material _glyphMaterial;
         [SerializeField] Material _scrimMaterial;
+        [SerializeField] Material _ringMaterial;      // Look and Fire: a ring closes on the orb you look at
 
         [Header("Layout (relative to the seated eye)")]
         [SerializeField] float _distance = 0.42f;     // the sling's reach
@@ -48,6 +50,10 @@ namespace Ricochet.Gameplay
         [SerializeField] float _takeDistance = 0.06f; // draw it this far out of its slot, then let go
         [SerializeField] float _maxDraw = 0.12f;
         [SerializeField] float _gazePickDeg = 12f;    // mouse (no reach): the orb nearest the gaze
+        // Look and Fire: only an orb you look *at* charges. A level gaze sits ~11 deg above the centre orb (and a card's
+        // words ~5 deg from its orb), so a wide cone took rewards nobody chose. Held 1.5x wider once charging.
+        [SerializeField] float _lookPickDeg = 6f;
+        [SerializeField] float _lookPickDelay = 0.8f; // after the orbs settle: nothing charges before you can look
 
         /// <summary>Automation: when >= 0, the next offer picks this orb by itself after a short beat.</summary>
         public static int AutoPick = -1;
@@ -60,8 +66,8 @@ namespace Ricochet.Gameplay
 
         sealed class Orb
         {
-            public Transform Root, Core, Halo, Glyph, Card;
-            public MeshRenderer CoreR, HaloR, GlyphR, CardR;
+            public Transform Root, Core, Halo, Glyph, Card, Ring;
+            public MeshRenderer CoreR, HaloR, GlyphR, CardR, RingR;
             public TextMeshPro Name, Blurb;
             public Vector3 Home;
             public Vector3 Offset;       // drawn out of the slot by the hand
@@ -78,9 +84,11 @@ namespace Ricochet.Gameplay
         State _state = State.Hidden;
         int _count;
         int _held = -1;
+        int _dwellOrb = -1;          // Look and Fire (AssistAim): the orb being looked at, charging
+        float _dwellClock;
         IPinchInput _holder;
         Vector3 _grabPoint;
-        float _clock, _takeClock, _autoClock;
+        float _clock, _takeClock, _autoClock, _openedAt;
         Vector3 _takeFrom;
         bool _landed;
 
@@ -99,14 +107,19 @@ namespace Ricochet.Gameplay
             o.Core = Part("Core", o.Root, _orbMesh, _orbMaterial, out o.CoreR);
             o.Halo = Part("Halo", o.Root, Quad(), _haloMaterial, out o.HaloR);
             o.Glyph = Part("Glyph", o.Root, Quad(), _glyphMaterial, out o.GlyphR);
+            if (_ringMaterial != null)
+            {
+                o.Ring = Part("Ring", o.Root, Quad(), _ringMaterial, out o.RingR);
+                o.RingR.enabled = false;
+            }
             if (_scrimMaterial != null)
             {
                 // The card hangs in the slot (not on the orb), like the words, so a drawn orb leaves it behind.
                 o.Card = Part("Card", o.Root, Quad(), _scrimMaterial, out o.CardR);
                 o.Card.SetParent(transform, false);
             }
-            o.Name = Text("Name", o.Root, 0.0185f, FontStyles.Bold);
-            o.Blurb = Text("Blurb", o.Root, 0.0135f, FontStyles.Normal);
+            o.Name = Text("Name", o.Root, 0.0185f, FontStyles.Bold, true);
+            o.Blurb = Text("Blurb", o.Root, 0.0135f, FontStyles.Normal, false);
             return o;
         }
 
@@ -135,16 +148,17 @@ namespace Ricochet.Gameplay
             return go.transform;
         }
 
-        static TextMeshPro Text(string name, Transform parent, float scale, FontStyles style)
+        static TextMeshPro Text(string name, Transform parent, float scale, FontStyles style, bool display)
         {
             var go = new GameObject(name);
             go.transform.SetParent(parent, false);
             go.transform.localScale = Vector3.one * scale;
             var text = go.AddComponent<TextMeshPro>();
+            text.fontStyle = style;
+            UiFonts.Use(text, display);
             text.fontSize = 10f;
             text.alignment = TextAlignmentOptions.Center;
             text.textWrappingMode = TextWrappingModes.NoWrap;
-            text.fontStyle = style;
             text.rectTransform.sizeDelta = new Vector2(12f, 3f);
             text.outlineWidth = 0.2f;
             text.outlineColor = new Color32(16, 8, 32, 255);
@@ -168,6 +182,7 @@ namespace Ricochet.Gameplay
             Chosen = -1;
             _held = -1;
             _holder = null;
+            _dwellOrb = -1;
             _clock = 0f;
             _autoClock = 0f;
 
@@ -221,7 +236,7 @@ namespace Ricochet.Gameplay
                         _orbs[i].Appear = t;
                         all &= t >= 1f;
                     }
-                    if (all) _state = State.Open;
+                    if (all) { _state = State.Open; _openedAt = _clock; }
                     break;
                 case State.Open:
                     UpdateGesture(dt);
@@ -270,6 +285,8 @@ namespace Ricochet.Gameplay
                 return;
             }
 
+            if (AssistAim.Enabled && UpdateLookPick(dt, inputs)) return;
+
             // Hover and grab.
             for (int i = 0; i < _count; i++) _orbs[i].Hover = Mathf.MoveTowards(_orbs[i].Hover, 0f, dt * 4f);
             for (int k = 0; k < inputs.Count; k++)
@@ -282,7 +299,7 @@ namespace Ricochet.Gameplay
 
                 int target;
                 float closeness;
-                if (float.IsInfinity(input.ReachScale)) target = GazeTarget(out closeness);
+                if (float.IsInfinity(input.ReachScale)) target = GazeTarget(_gazePickDeg, out closeness);
                 else target = Nearest(input.PinchPoint, out closeness);
                 if (target < 0) continue;
                 var o = _orbs[target];
@@ -304,6 +321,46 @@ namespace Ricochet.Gameplay
             }
         }
 
+        /// <summary>
+        /// Look and Fire: the orb you look at charges (the same swell, ticks and chime as a hand draw) and is taken
+        /// when full, or at once on any pinch. Slow enough to read its card first. True while an orb is looked at.
+        /// </summary>
+        bool UpdateLookPick(float dt, System.Collections.Generic.IReadOnlyList<Input.IPinchInput> inputs)
+        {
+            int target = _clock - _openedAt < _lookPickDelay ? -1
+                : GazeTarget(_dwellOrb >= 0 ? _lookPickDeg * 1.5f : _lookPickDeg, out _);
+            if (target != _dwellOrb)
+            {
+                if (_dwellOrb >= 0) { _orbs[_dwellOrb].Charge = 0f; _orbs[_dwellOrb].Tick = 0; _orbs[_dwellOrb].Ready = false; }
+                _dwellOrb = target;
+                _dwellClock = 0f;
+            }
+            if (target < 0) return false;
+
+            var o = _orbs[target];
+            _dwellClock += dt;
+            for (int i = 0; i < _count; i++) if (i != target) _orbs[i].Hover = Mathf.MoveTowards(_orbs[i].Hover, 0f, dt * 4f);
+            o.Hover = Mathf.MoveTowards(o.Hover, 1f, dt * 6f);
+            o.Charge = Mathf.Clamp01(_dwellClock / AssistAim.PickDwell);
+            int tick = Mathf.FloorToInt(o.Charge * 4f);
+            if (tick > o.Tick) _sfx.PlayPullTick(tick, o.Root.position);
+            o.Tick = tick;
+
+            bool pinched = false;
+            for (int k = 0; k < inputs.Count; k++)
+            {
+                bool p = inputs[k].IsPinching;
+                if (p && !_wasPinching[k] && inputs[k].IsTracked) pinched = true;
+                _wasPinching[k] = p;
+            }
+            if (pinched || o.Charge >= 1f)
+            {
+                _dwellOrb = -1;
+                Take(target);
+            }
+            return true;
+        }
+
         int Nearest(Vector3 point, out float closeness)
         {
             int best = -1;
@@ -317,14 +374,14 @@ namespace Ricochet.Gameplay
             return best;
         }
 
-        int GazeTarget(out float closeness)
+        int GazeTarget(float maxDeg, out float closeness)
         {
-            Transform head = _playArea.Head;
+            EyeGaze.Ray(_playArea.Head, out Vector3 eye, out Vector3 gaze);
             int best = -1;
-            float bestA = _gazePickDeg;
+            float bestA = maxDeg;
             for (int i = 0; i < _count; i++)
             {
-                float a = Vector3.Angle(head.forward, _orbs[i].Home - head.position);
+                float a = Vector3.Angle(gaze, _orbs[i].Home - eye);
                 if (a < bestA) { bestA = a; best = i; }
             }
             closeness = best < 0 ? 0f : 1f;
@@ -410,9 +467,27 @@ namespace Ricochet.Gameplay
                 _block.SetFloat(IntensityId, (1.2f + 0.6f * o.Hover + 0.8f * o.Charge) * o.Fade);
                 o.GlyphR.SetPropertyBlock(_block);
 
-                // The words stay put while the orb is drawn out, so they never swing through your hand.
+                if (o.RingR != null)
+                {
+                    // Look and Fire: the ring closes on the orb as the look holds, as on a dwell shot.
+                    bool looking = i == _dwellOrb && _held < 0 && o.Charge > 0.02f;
+                    o.RingR.enabled = looking;
+                    if (looking)
+                    {
+                        float k = o.Charge;
+                        o.Ring.localScale = Vector3.one * (_orbRadius * 4.4f * Mathf.Lerp(2.2f, 1f, k * k));
+                        _block.Clear();
+                        _block.SetColor(ColorId, AssistAim.Tint);
+                        _block.SetFloat(IntensityId, (0.6f + 2.2f * k) * o.Fade);
+                        _block.SetFloat(RadiusId, 0.4f);
+                        o.RingR.SetPropertyBlock(_block);
+                    }
+                }
+
+                // The words stay put while the orb is drawn out, so they never swing through your hand. The name lifts
+                // a little as the orb swells, so its glow never washes over the word.
                 float textAlpha = Mathf.Clamp01(o.Appear * 1.5f - 0.5f) * (i == Chosen ? 1f - Mathf.Clamp01(_takeClock * 4f) : o.Fade);
-                o.Name.transform.position = o.Home + bob + Vector3.up * (_orbRadius + 0.024f);
+                o.Name.transform.position = o.Home + bob + Vector3.up * (_orbRadius + 0.024f + 0.014f * o.Charge);
                 o.Blurb.transform.position = o.Home + bob + Vector3.down * (_orbRadius + 0.03f);
                 o.Name.transform.rotation = o.Blurb.transform.rotation = Quaternion.LookRotation(o.Home - eye, Vector3.up);
                 o.Name.alpha = textAlpha * (0.9f + 0.1f * o.Hover);

@@ -30,8 +30,8 @@ namespace Ricochet.Gameplay
 
         void Awake()
         {
-            _title = Text("Title", 0f, _titleScale, FontStyles.Bold | FontStyles.UpperCase);
-            _subtitle = Text("Subtitle", -0.085f, _subtitleScale, FontStyles.Bold);
+            _title = Text("Title", 0f, _titleScale, FontStyles.Bold | FontStyles.UpperCase, true);
+            _subtitle = Text("Subtitle", -0.085f, _subtitleScale, FontStyles.Bold, false);
             _subtitle.outlineWidth = 0.24f;
             if (_scrimMaterial != null)
             {
@@ -52,13 +52,16 @@ namespace Ricochet.Gameplay
             _subtitle.gameObject.SetActive(false);
         }
 
-        TextMeshPro Text(string name, float y, float scale, FontStyles style)
+        TextMeshPro Text(string name, float y, float scale, FontStyles style, bool display)
         {
             var go = new GameObject(name);
             go.transform.SetParent(transform, false);
             go.transform.localPosition = new Vector3(0f, y, 0f);
             go.transform.localScale = Vector3.one * scale;
             var text = go.AddComponent<TextMeshPro>();
+            text.fontStyle = style;
+            UiFonts.Use(text, display);
+            style = text.fontStyle;
             text.fontSize = 10f;
             text.alignment = TextAlignmentOptions.Center;
             text.textWrappingMode = TextWrappingModes.NoWrap;
@@ -86,8 +89,10 @@ namespace Ricochet.Gameplay
             {
                 // Sized to the settled title (once per banner, not per frame).
                 _title.characterSpacing = 8f;
-                float w = _title.GetPreferredValues(title).x * _titleScale;
-                _card.localScale = new Vector3(Mathf.Clamp(w + 0.34f, 0.6f, 1.05f), 0.3f, 1f);
+                _subtitle.characterSpacing = 4f;
+                float w = Mathf.Max(_title.GetPreferredValues(title).x * _titleScale,
+                                    _subtitle.GetPreferredValues(subtitle).x * _subtitleScale);
+                _card.localScale = new Vector3(Mathf.Clamp(w + 0.34f, 0.6f, 1.15f), 0.3f, 1f);
                 _card.gameObject.SetActive(true);
             }
             Update();

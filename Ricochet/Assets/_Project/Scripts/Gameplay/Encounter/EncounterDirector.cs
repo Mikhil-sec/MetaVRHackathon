@@ -32,11 +32,14 @@ namespace Ricochet.Gameplay
         [SerializeField] RewardPicker _rewards;
         [SerializeField] Banner _banner;
         [SerializeField] Trophies _trophies;
+        [SerializeField] MusicBed _music;
 
         [Header("Rules")]
         [SerializeField] int _maxShield = 30;
-        [SerializeField] int _shieldRestore = 15;
-        [SerializeField] int _refreshBelow = 12;         // fewer crystals left than this: a fresh board next turn
+        [SerializeField] int _shieldRestore = 18;
+        // Fewer crystals left than this: a fresh board next turn. A thinned-out board leaves only lone crystals (one hit,
+        // one damage), which starved weaker players (soak test, session 11); every fresh board has a guaranteed hero shot.
+        [SerializeField] int _refreshBelow = 16;
         [SerializeField] int _feverPoints = 50;
         [SerializeField] int _aegisShield = 10;
         [SerializeField] int _thornDamage = 2;
@@ -51,6 +54,7 @@ namespace Ricochet.Gameplay
         [SerializeField] Color _runWave = new(0.9f, 0.6f, 1.8f);
         [SerializeField] float _feverWaveSpeed = 3.2f; // m/s: a 5 m room sweeps in ~1.5 s
         [SerializeField] Color _burstColor = new(1f, 0.35f, 0.8f);
+        [SerializeField] Color _sparkArriveGlow = new(0.5f, 1.4f, 2f);
         [SerializeField] Color _shardColor = new(1f, 0.85f, 0.45f);
 
         readonly List<Crystal> _scratch = new();
@@ -61,6 +65,13 @@ namespace Ricochet.Gameplay
         Vector3? _lastRift;
         bool _placeRift;
         RiftPlacer.Placement _placement;
+        readonly List<Vector3> _crowns = new();
+        int _crownLanded;
+        bool _hurtVoiced;                                // the creature's squeal, once per turn
+        bool _announceDaily;                             // the Daily Rift's banner, once the first Spark is in the sling
+        bool _announceAscension;                         // a harder run's banner, likewise
+        bool _coldOpen = true;                           // the session's first encounter opens slowly (CONCEPT section 4)
+        int _seedArrivals;
         RunState _run;
         System.Random _rng;
 
@@ -90,6 +101,7 @@ namespace Ricochet.Gameplay
 
         void Awake()
         {
+            Leaderboard.Init();
             var saved = ResumeEnabled ? RunState.Load() : null;
             StartRun(saved);
             if (saved != null) Debug.Log($"[Ricochet] Run resumed: {saved}");
@@ -102,14 +114,43 @@ namespace Ricochet.Gameplay
 
         void StartRun(RunState saved)
         {
-            _run = saved ?? RunState.New(_maxShield);
+            // The first new run of the day is the Daily Rift: the same seed, boards and starting gift for everyone today.
+            int daily = saved == null && DailyRift.Due ? DailyRift.Today : 0;
+            _run = saved ?? RunState.New(_maxShield, daily);
             _rng = new System.Random(_run.Seed + 7919 * _run.Encounter);
             _director.Run = _run;
             if (saved != null) _director.RestoreScore(saved.Score, saved.BestCombo);
             else _director.ResetScore();
+            if (daily != 0)
+            {
+                DailyRift.MarkPlayed(daily);
+                var gift = DailyRift.Gift(daily);
+                Gift(gift.spark);
+                Gift(gift.relic);
+                Debug.Log($"[Ricochet] Daily Rift {daily}: gift {gift.spark.Name} + {gift.relic.Name}");
+            }
+            _announceDaily = _run.Daily != 0;
+            _announceAscension = saved == null && _run.Daily == 0 && _run.Ascension > 0;
+            _rift.SetDaily(_run.Daily != 0);
             ApplyRelicsToBoard();
             ShieldChanged?.Invoke(_run.Shield, 0);
             RunChanged?.Invoke();
+        }
+
+        // A starting gift goes straight into the fresh run (this can run in Awake, before the sling and HUD are up; they
+        // read the run when they arm and draw).
+        void Gift(Reward reward)
+        {
+            if (reward.Type == RewardType.Spark)
+            {
+                if (!_run.Bag.Contains(reward.Spark)) _run.Bag.Add(reward.Spark);
+                _run.BagIndex = _run.Bag.IndexOf(reward.Spark); // the gift is the first Spark you hold
+            }
+            else if (reward.Type == RewardType.Relic)
+            {
+                _run.Add(reward.Relic);
+                if (reward.Relic == Relic.Aegis) _run.Shield = _run.MaxShield += _aegisShield;
+            }
         }
 
         void ApplyRelicsToBoard() => _board.ExtraGold = _run.Has(Relic.GoldRush) ? _goldRushExtra : 0;
@@ -118,12 +159,23 @@ namespace Ricochet.Gameplay
         {
             _director.CrystalPopped += OnCrystalPopped;
             _motes.Arrived += OnMoteArrived;
+            _sling.Arrived += OnSparkArrived;
         }
 
         void OnDisable()
         {
             _director.CrystalPopped -= OnCrystalPopped;
             _motes.Arrived -= OnMoteArrived;
+            _sling.Arrived -= OnSparkArrived;
+        }
+
+        /// <summary>The cold open's Spark settles into the band: a chime, a cyan pulse on the real room, a little burst.</summary>
+        void OnSparkArrived()
+        {
+            Vector3 at = _sling.transform.position;
+            _sfx.PlayGrab(at);
+            _glow.Pulse(at, _sparkArriveGlow, 0.7f, 0.5f);
+            if (_fx != null) _fx.Burst(at, _sparkArriveGlow, 0.5f);
         }
 
         // Quitting or taking the headset off mid-run: keep what the last turn saved, plus the score so far.
@@ -148,15 +200,20 @@ namespace Ricochet.Gameplay
         /// band (TECH_GUIDE section 7) even when the rift uses the +/-30 degree tier: past 20 degrees it glides out of
         /// the rift toward the centre of view (rotated about the eye) and a little nearer.
         /// </summary>
-        Vector3 CreatureHome(Vector3 mouth)
+        Vector3 CreatureHome()
         {
             const float maxYaw = 20f;
             // The seat, not the live head: a lean (or a trailer camera) must not move where the creature settles.
             Vector3 eye = _playArea.Seat.position;
+            // Out of the wall by the creature's own reach (body plus orbiting shards ~1x its drawn size): it grows with
+            // distance, so a far wall's Queen (~0.75 m) would otherwise sink half into the wall and be occluded by it.
+            Vector3 wall = _rift.transform.position, normal = _rift.transform.forward;
+            float size = _def.Size * Creature.DistanceScale(Vector3.Distance(eye, wall));
+            Vector3 mouth = wall + normal * Mathf.Max(0.32f, size + 0.06f);
             Vector3 forward = Vector3.ProjectOnPlane(_playArea.Seat.forward, Vector3.up);
             Vector3 to = mouth - eye;
             float yaw = Vector3.SignedAngle(forward, Vector3.ProjectOnPlane(to, Vector3.up), Vector3.up);
-            if (Mathf.Abs(yaw) <= maxYaw) return mouth;
+            if (Mathf.Abs(yaw) <= maxYaw) return Unblocked(eye, mouth);
             Quaternion swing = Quaternion.AngleAxis(Mathf.Clamp(yaw, -maxYaw, maxYaw) - yaw, Vector3.up);
             return Unblocked(eye, eye + swing * to * 0.85f);
         }
@@ -183,21 +240,34 @@ namespace Ricochet.Gameplay
 
         IEnumerator OpenEncounter()
         {
-            _def = CreatureDef.ForEncounter(_run.Encounter);
+            // The session's first rift is a cold open (CONCEPT section 4, zero text): the real room dims, a beat of
+            // stillness, a slow hairline crack, the crystals spill out of it, the creature follows, and last the
+            // Spark itself flies out of the rift into the sling. Later encounters keep the quick version.
+            bool cold = _coldOpen;
+            _coldOpen = false;
+            float t0 = Time.time;
+            _def = CreatureDef.ForEncounter(_run.Encounter, _run.Ascension);
             RunChanged?.Invoke();
+            if (cold) yield return WaitReal(1.4f);
             // The board comes first so the rift can keep clear of the hero cluster (the guaranteed first shot);
             // PlaceRift runs as the board shaper, then clears crystals from the rift's patch of wall.
             _board.SetExclusion(Vector3.zero, 0f);
             _placeRift = true;
+            _director.SeedBoards(_run.Seed + 7919 * _run.Encounter); // one run, one set of boards (the daily is everyone's)
             _director.RegenerateBoard(); // crystals cascade in while the crack spreads
             var place = _placement;
             Debug.Log($"[Ricochet] Encounter {_run.Encounter + 1}/{RunState.EncountersPerRun}: {_def.Name} (HP {_def.Hp}), rift {place.Info}");
-            _rift.Open(place.Position, place.Normal);
+            _rift.Open(place.Position, place.Normal, cold ? 2.2f : -1f);
+            if (_trophies != null) _trophies.Yield(place.Position, 0.55f); // a crown under the crack steps aside
             _sfx.PlayRiftOpen(place.Position);
+            if (_music != null) _music.SetIntensity(_def.Boss ? 1f : 0f);
             if (_def.Boss && _banner != null) _banner.Show(_def.Name, "the last rift", _def.Identity.a > 0f ? _def.Identity / Mathf.Max(1f, _def.Identity.maxColorComponent) : _burstColor, 3.2f);
-            yield return Wait(_def.Boss ? 1.6f : 0.9f);
+            // The board spills out of the crack once it has split, nearest crystals first, each popping in as it lands.
+            float spilled = Time.time - t0 + SeedBoard(_rift.Mouth, cold ? 1.2f : 0.45f, cold ? 1.6f : 0.9f);
+            yield return Wait(cold ? 2.6f : _def.Boss ? 1.6f : 0.9f);
 
-            _creature.Emerge(_def, place.Position, CreatureHome(_rift.Mouth), _playArea.Head);
+            _creature.Emerge(_def, place.Position, CreatureHome(), _playArea.Head);
+            _sfx.PlayEmerge(place.Position, VoicePitch);
             _intentIndex = 0;
             if (_run.CreatureHp > 0)
             {
@@ -208,6 +278,98 @@ namespace Ricochet.Gameplay
             yield return Wait(0.8f);
             _creature.ShowIntent(_def.Cycle[_intentIndex]);
             SaveRun();
+            while (Time.time - t0 < spilled) yield return null; // every crystal is in place before the Spark arms
+            if (cold) _sling.ArriveFrom = _rift.Mouth;          // the rift's light, now yours
+            if (_announceDaily)
+            {
+                _announceDaily = false;
+                StartCoroutine(AnnounceDaily(cold ? 1.3f : 0.4f));
+            }
+            else if (_announceAscension)
+            {
+                _announceAscension = false;
+                StartCoroutine(AnnounceAscension(cold ? 1.3f : 0.4f));
+            }
+        }
+
+        /// <summary>Each creature's voice: small ones chirp higher, big ones rumble lower (Wisp ~1.25 .. Queen ~0.8).</summary>
+        float VoicePitch => Mathf.Lerp(1.25f, 0.8f, Mathf.InverseLerp(0.24f, 0.42f, _def != null ? _def.Size : 0.3f));
+
+        /// <summary>
+        /// Where a damage number goes: beside the creature, alternating sides, never over its body (the cracks, the
+        /// seizure and the shatter are the feedback that matters there).
+        /// </summary>
+        Vector3 BesideCreature(int n)
+        {
+            Vector3 at = _creature.Center;
+            Vector3 eye = _playArea.Head != null ? _playArea.Head.position : _playArea.Seat.position;
+            Vector3 right = Vector3.Cross(eye - at, Vector3.up).normalized; // the viewer's right
+            float side = (n & 1) == 0 ? 1f : -1f;
+            return at + right * (side * _creature.Size * 1.25f) + Vector3.up * (_creature.Size * 0.35f);
+        }
+
+        /// <summary>Once the Spark is in the sling (the opening itself stays wordless): which day, and the day's gift.</summary>
+        IEnumerator AnnounceDaily(float delay)
+        {
+            yield return WaitReal(delay);
+            if (_banner == null) yield break;
+            var gift = DailyRift.Gift(_run.Daily);
+            int best = DailyRift.Best(_run.Daily);
+            string sub = $"{DailyRift.Label(_run.Daily)}    {gift.spark.Name} + {gift.relic.Name}";
+            _banner.Show("Daily Rift", best > 0 ? sub + $"    best {best:N0}" : sub, DailyColor, 3.5f);
+        }
+
+        static readonly Color DailyColor = new(1f, 0.66f, 0.3f);
+        static readonly Color AscensionColor = new(1f, 0.45f, 0.28f);
+
+        IEnumerator AnnounceAscension(float delay)
+        {
+            yield return WaitReal(delay);
+            if (_banner != null)
+                _banner.Show($"Ascension {_run.Ascension}", "the rifts grow stronger", AscensionColor, 3f);
+        }
+
+        /// <summary>The run is over (sealed or lost): keep the score where it counts. Returns the banner's extra line.</summary>
+        string RecordRun(bool won)
+        {
+            int score = _director.Score;
+            Leaderboard.Submit(Leaderboard.BestRun, score);
+            if (_run.Daily == 0)
+            {
+                // A completed run climbs one Ascension tier (a loss never lowers it).
+                if (!won || _run.Ascension >= Ascension.Max) return "";
+                return $"    ascension {Ascension.Completed(_run.Ascension)} next";
+            }
+            bool best = DailyRift.Record(_run.Daily, score);
+            if (best) return "    daily best!";
+            return DailyRift.Best(_run.Daily) > 0 ? $"    daily best {DailyRift.Best(_run.Daily):N0}" : "";
+        }
+
+        /// <summary>
+        /// Every crystal of the fresh board flies out of the rift to its place as a streak of light and pops in where it
+        /// lands, nearest first, so the board reads as something the rift let into the room. Visual only: the crystals
+        /// (and their colliders) are already placed; they are just hidden until their streak arrives.
+        /// </summary>
+        /// <returns>Seconds until the last crystal lands.</returns>
+        float SeedBoard(Vector3 from, float start, float spread)
+        {
+            var active = _board.Active;
+            float far = 0.01f;
+            for (int i = 0; i < active.Count; i++) far = Mathf.Max(far, Vector3.Distance(from, active[i].transform.position));
+            float last = 0f;
+            _seedArrivals = 0;
+            Vector3 outward = _rift.transform.forward; // out of the wall: the streams pour into the room, then curve home
+            for (int i = 0; i < active.Count; i++)
+            {
+                Vector3 to = active[i].transform.position;
+                float d = Vector3.Distance(from, to);
+                float delay = start + spread * (d / far) * (0.8f + 0.2f * Mathf.Repeat(i * 0.618034f, 1f));
+                float flight = 0.38f + 0.08f * d;
+                _motes.Launch(LightMotes.Kind.Seed, i, from, to, delay, flight, outward);
+                active[i].Appear(delay + flight * 0.9f);
+                last = Mathf.Max(last, delay + flight);
+            }
+            return last;
         }
 
         int ShapeBoard()
@@ -215,7 +377,8 @@ namespace Ricochet.Gameplay
             if (_placeRift)
             {
                 _placeRift = false;
-                _placement = RiftPlacer.Place(_playArea.Room, _playArea.Seat, _lastRift, _board.HeroPoint);
+                if (_trophies != null) _trophies.GetPositions(_crowns);
+                _placement = RiftPlacer.Place(_playArea.Room, _playArea.Seat, _lastRift, _board.HeroPoint, _crowns);
                 _lastRift = _placement.Position;
                 _board.SetExclusion(_placement.ExclusionCenter, _placement.ExclusionRadius);
                 _board.ClearExclusion();
@@ -234,12 +397,25 @@ namespace Ricochet.Gameplay
         {
             switch (kind)
             {
+                case LightMotes.Kind.Seed:
+                    if ((_seedArrivals++ & 1) == 0) _sfx.PlaySeed(_seedArrivals / 2, at);
+                    break;
+
+                case LightMotes.Kind.Crown:
+                    _sfx.PlaySeed(4 + _crownLanded++, at); // the crown arrives as a rising run of notes
+                    break;
+
                 case LightMotes.Kind.Damage:
                     bool armored = _creature.Armor > 0;
-                    _creature.TakeDamage(amount);
+                    int dealt = _creature.TakeDamage(amount);
+                    if (!_hurtVoiced && dealt > 0 && _creature.Alive)
+                    {
+                        _hurtVoiced = true; // it squeals once per turn, at the first light that gets through
+                        _sfx.PlayHurt(_creature.Center, VoicePitch);
+                    }
                     _sfx.PlayTick(_tick++, at);
                     if (armored) _sfx.PlayGuard(at); // light spent on armor rings hollow
-                    if (_popups != null) _popups.Show(at + Vector3.up * 0.12f, amount, _tick, true);
+                    if (_popups != null) _popups.Show(BesideCreature(_tick), amount, _tick, true);
                     _glow.Pulse(at, armored ? _guardGlow : _damageGlow, 0.6f, 0.3f);
                     break;
 
@@ -254,6 +430,7 @@ namespace Ricochet.Gameplay
                         // Thornlight: the shield throws some of the blow back as light.
                         _motes.Launch(LightMotes.Kind.Damage, _thornDamage, at, _creature.Center, 0.1f, 0.45f);
                         _glow.Pulse(at, Upgrades.RelicColor * 1.3f, 0.6f, 0.4f);
+                        _director.TriggerRelic(Relic.Thornlight, at);
                     }
                     break;
 
@@ -278,6 +455,7 @@ namespace Ricochet.Gameplay
             // Let the light land first: the damage ticks are the payoff of the shot.
             while (_motes.InFlight > 0) yield return null;
             _tick = 0;
+            _hurtVoiced = false;
             yield return Wait(0.2f);
 
             if (!_creature.Alive)
@@ -311,7 +489,8 @@ namespace Ricochet.Gameplay
 
         IEnumerator CreatureAct(Intent intent)
         {
-            // Anticipation: it draws back and burns in the color of its move.
+            // Anticipation: it draws back and burns in the color of its move, with a rising growl.
+            _sfx.PlayGrowl(_creature.Center, VoicePitch);
             for (float t = 0f; t < 0.45f; t += Time.deltaTime)
             {
                 _creature.SetWindup(t / 0.45f);
@@ -383,25 +562,38 @@ namespace Ricochet.Gameplay
             Vector3 at = _creature.Center;
             bool boss = _def.Boss;
             Debug.Log($"[Ricochet] Encounter {_run.Encounter + 1} won: {_def.Name} sealed");
+            // The killing blow lands (crash, a flash of light); it seizes, cracks blazing, inside the hit-stop; then it
+            // breaks apart along its cracks (shatter, chord, the big pulse) and the rift zips shut behind it.
             _creature.Die();
             _sfx.PlayCrash(at);
-            _sfx.PlayChord(at);
-            _glow.Pulse(at, _victoryGlow, 2.2f, 1.6f);
-            if (_fx != null) { _fx.Burst(at, _burstColor); _fx.Burst(at, _shardColor); }
+            _glow.Pulse(at, _victoryGlow, 1.2f, 1f);
+            if (_fx != null) _fx.Burst(at, _burstColor);
             _warp.Hold(boss ? 0.2f : 0.3f, boss ? 1.6f : 0.9f);
-            yield return WaitReal(boss ? 1.6f : 0.9f);
+            for (float waited = 0f; !_creature.Shattered && _creature.gameObject.activeSelf && waited < 3f; waited += Time.deltaTime)
+                yield return null;
+            at = _creature.Center;
+            _sfx.PlayShatter(at);
+            _sfx.PlayChord(at);
+            if (_music != null) { _music.Lift(4f); _music.SetIntensity(1f); }
+            _glow.Pulse(at, _victoryGlow, 2.2f, 1.6f);
+            if (_fx != null) { _fx.Burst(at, _shardColor); _fx.Burst(at, _burstColor); }
+            yield return WaitReal(0.3f);
             _rift.Seal();
-            yield return WaitReal(0.4f);
+            if (_trophies != null) _trophies.Return();
+            // Game time: the zip runs on it (a pause or a freeze must not let Fever start mid-zip).
+            for (float waited = 0f; _rift.IsZipping && waited < 2f; waited += Time.deltaTime) yield return null;
+            yield return WaitReal(0.25f);
 
             yield return Fever(at);
 
             if (boss)
             {
-                yield return RunComplete();
+                yield return RunComplete(at);
                 yield break;
             }
 
             SetShield(_run.Shield + _shieldRestore);
+            if (_music != null) _music.SetIntensity(0f);
             yield return WaitReal(1.2f);
 
             // Between rifts: three rewards float up in front of you; pinch one, draw it in, let go.
@@ -485,24 +677,37 @@ namespace Ricochet.Gameplay
         }
 
         /// <summary>The Queen's crown stays on the wall where her rift was (behind a floating rift: the wall beyond it).</summary>
-        void PlaceTrophy()
+        /// <summary>Where the Queen's crown goes: her rift's wall (behind a floating rift: the wall beyond it).</summary>
+        bool TrophySpot(out Vector3 position, out Vector3 normal)
         {
-            if (_trophies == null) return;
-            Vector3 position = _placement.Position, normal = _placement.Normal;
-            if (!_placement.OnWall)
+            position = _placement.Position;
+            normal = _placement.Normal;
+            if (_trophies == null) return false;
+            if (_placement.OnWall) return true;
+            Vector3 eye = _playArea.Seat.position;
+            Vector3 dir = (position - eye).normalized;
+            if (_playArea.Room.Raycast(new Ray(eye, dir), 10f, out RaycastHit hit, out var anchor) && anchor != null &&
+                (anchor.Label & Meta.XR.MRUtilityKit.MRUKAnchor.SceneLabels.WALL_FACE) != 0)
             {
-                Vector3 eye = _playArea.Seat.position;
-                Vector3 dir = (position - eye).normalized;
-                if (!_playArea.Room.Raycast(new Ray(eye, dir), 10f, out RaycastHit hit, out var anchor) || anchor == null ||
-                    (anchor.Label & Meta.XR.MRUtilityKit.MRUKAnchor.SceneLabels.WALL_FACE) == 0) return;
                 position = hit.point;
                 normal = hit.normal;
+                return true;
             }
-            _trophies.Place(position, normal, _director.Score, _director.BestCombo);
+            // Furniture in the way (or no wall on that line): the wall nearest to where her rift hung.
+            float d = _playArea.Room.TryGetClosestSurfacePosition(position, out Vector3 surface, out var wall, out Vector3 n,
+                Meta.XR.MRUtilityKit.LabelFilter.Included(Meta.XR.MRUtilityKit.MRUKAnchor.SceneLabels.WALL_FACE));
+            if (float.IsInfinity(d) || wall == null || n.sqrMagnitude < 0.5f) return false;
+            if (Vector3.Dot(n, eye - surface) < 0f) n = -n; // out of the wall, into the room
+            position = surface;
+            normal = n.normalized;
+            return true;
         }
 
-        /// <summary>The boss is sealed: the whole room answers in waves of light, then a new run begins.</summary>
-        IEnumerator RunComplete()
+        /// <summary>
+        /// The boss is sealed: the whole room answers in waves of light, her crown streams as gold light to the wall where
+        /// her rift was and grows there as your trophy, then a new run begins.
+        /// </summary>
+        IEnumerator RunComplete(Vector3 fell)
         {
             Debug.Log($"[Ricochet] Run complete! score {_director.Score}, best chain {_director.BestCombo}");
             RunState.Clear();
@@ -515,8 +720,18 @@ namespace Ricochet.Gameplay
                 if (_fx != null) { _fx.Burst(center, _shardColor); _fx.Burst(center, _burstColor); }
                 yield return WaitReal(0.7f);
             }
-            PlaceTrophy();
-            if (_banner != null) _banner.Show("Rift sealed", $"score {_director.Score:N0}    best chain ×{_director.BestCombo}", _shardColor, 4.5f);
+            if (TrophySpot(out Vector3 crownAt, out Vector3 wallNormal))
+            {
+                Vector3 to = crownAt + wallNormal * 0.05f;
+                _crownLanded = 0;
+                for (int i = 0; i < 6; i++)
+                    _motes.Launch(LightMotes.Kind.Crown, 0, fell + UnityEngine.Random.insideUnitSphere * 0.08f, to, 0.07f * i, 0.8f, Vector3.up);
+                yield return WaitReal(1.3f);
+                _trophies.Place(crownAt, wallNormal, _director.Score, _director.BestCombo);
+            }
+            string extra = RecordRun(true);
+            if (_banner != null) _banner.Show(_run.Daily != 0 ? "Daily Rift sealed" : "Rift sealed",
+                $"score {_director.Score:N0}    best chain ×{_director.BestCombo}{extra}", _run.Daily != 0 ? DailyColor : _shardColor, 4.5f);
             yield return WaitReal(5f);
 
             _lastRift = null;
@@ -532,9 +747,15 @@ namespace Ricochet.Gameplay
             _glow.Pulse(heart, _shieldHitGlow * 1.5f, 3f, 2f);
             _sfx.PlayShieldHit(heart);
             yield return WaitReal(1.2f);
-            _creature.Die();
+            _creature.Retreat(); // it slips back into the rift, and the rift zips shut on it
+            if (_music != null) _music.SetIntensity(0f);
+            yield return WaitReal(0.6f);
             _rift.Seal();
-            yield return WaitReal(1f);
+            if (_trophies != null) _trophies.Return();
+            string extra = RecordRun(false);
+            if (_banner != null) _banner.Show("The rift holds", $"score {_director.Score:N0}    rift {_run.Encounter + 1} of {RunState.EncountersPerRun}{extra}",
+                new Color(1f, 0.35f, 0.5f), 3.2f);
+            yield return WaitReal(3.6f);
 
             _lastRift = null;
             StartRun(null);

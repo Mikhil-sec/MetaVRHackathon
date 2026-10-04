@@ -18,6 +18,8 @@ namespace Ricochet.Gameplay
 
         public int Version = FormatVersion;
         public int Seed;
+        public int Daily;     // the Daily Rift's date (yyyymmdd), 0 for an ordinary run
+        public int Ascension; // 0..Ascension.Max: how much stronger this run's creatures are
         public int Encounter;
         public int Shield;
         public int MaxShield;
@@ -37,9 +39,11 @@ namespace Ricochet.Gameplay
         public SparkKind NextSpark => Bag.Count > 0 ? Bag[BagIndex % Bag.Count] : SparkKind.Plain;
         public void AdvanceBag() => BagIndex = Bag.Count > 0 ? (BagIndex + 1) % Bag.Count : 0;
 
-        public static RunState New(int maxShield) => new()
+        public static RunState New(int maxShield, int daily = 0) => new()
         {
-            Seed = Environment.TickCount & 0x7fffffff,
+            Seed = daily != 0 ? DailyRift.Seed(daily) : Environment.TickCount & 0x7fffffff,
+            Daily = daily,
+            Ascension = daily != 0 ? 0 : Gameplay.Ascension.ForNewRun,
             Shield = maxShield,
             MaxShield = maxShield,
         };
@@ -78,7 +82,7 @@ namespace Ricochet.Gameplay
         }
 
         public override string ToString() =>
-            $"encounter {Encounter + 1}/{EncountersPerRun}, shield {Shield}/{MaxShield}, score {Score}, " +
+            $"{(Daily != 0 ? "daily " + Daily + ", " : "")}{(Ascension > 0 ? "ascension " + Ascension + ", " : "")}encounter {Encounter + 1}/{EncountersPerRun}, shield {Shield}/{MaxShield}, score {Score}, " +
             $"bag [{string.Join(",", Bag)}] next {NextSpark}, relics {(Relic)Relics}";
     }
 }

@@ -335,12 +335,18 @@ Shader "Ricochet/IntentGlyph"
                     d = min(d, Arrowhead(p, e, f));
                     solid = Box(p - float2(0.0, -0.66), float2(0.8, 0.05));
                 }
-                else
+                else if (kind < 22.5)
                 {
                     // Resonance: a source ringing out in three waves.
                     float2 c = float2(-0.48, 0.0);
                     solid = length(p - c) - 0.15;
                     d = min(ArcAt(p - c, 0.0, 0.8, 0.38), min(ArcAt(p - c, 0.0, 0.75, 0.68), ArcAt(p - c, 0.0, 0.7, 0.98)));
+                }
+                else
+                {
+                    // Ascension: a bold chevron pointing up (one per tier).
+                    d = min(Segment(p, float2(-0.62, -0.3), float2(0.0, 0.32)), Segment(p, float2(0.0, 0.32), float2(0.62, -0.3)));
+                    w *= 1.8;
                 }
                 float aa = fwidth(d) + 1e-4;
                 float aaS = fwidth(solid) + 1e-4;

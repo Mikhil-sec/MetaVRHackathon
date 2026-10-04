@@ -7,6 +7,28 @@ namespace Ricochet.Dev
     public static class DevHooks
     {
         static TimeLog s_timeLog;
+        const string FreezeNextKey = "Ricochet.Dev.FreezeNextPlay";
+
+        /// <summary>
+        /// Call outside Play: the next Play arms <see cref="FreezeOn"/>(moment) as soon as the scene loads, for moments
+        /// that happen before an eval can reach a freshly started Play session (the cold open's "seeds", "arrive").
+        /// </summary>
+        public static string FreezeNextPlay(string moment)
+        {
+            PlayerPrefs.SetString(FreezeNextKey, moment);
+            PlayerPrefs.Save();
+            return "next Play freezes on " + moment;
+        }
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+        static void ArmFreezeNextPlay()
+        {
+            if (!Application.isEditor) return;
+            string moment = PlayerPrefs.GetString(FreezeNextKey, "");
+            if (moment.Length == 0) return;
+            PlayerPrefs.DeleteKey(FreezeNextKey);
+            Debug.Log($"[Ricochet] Dev: {FreezeOn(moment)}");
+        }
 
         /// <summary>Start (or restart) recording the time scale every frame.</summary>
         public static string StartTimeLog()
@@ -26,7 +48,8 @@ namespace Ricochet.Dev
 
         /// <summary>
         /// Freeze at a gameplay moment: "motes" (light flying into the creature), "bolt" (its attack in flight),
-        /// "windup" (the creature drawing back), "drama" (last-crystal / lethal slow motion).
+        /// "windup" (the creature drawing back), "drama" (last-crystal / lethal slow motion), "seize" / "shatter" (the
+        /// creature dying), "zip" (the rift sealing).
         /// </summary>
         public static string FreezeOn(string moment, float scale = 0.001f)
         {
@@ -34,6 +57,9 @@ namespace Ricochet.Dev
             var motes = Object.FindAnyObjectByType<LightMotes>();
             var director = Object.FindAnyObjectByType<ShotDirector>();
             var drama = Object.FindAnyObjectByType<ShotDrama>();
+            var sling = Object.FindAnyObjectByType<Sling>();
+            var creature = Object.FindAnyObjectByType<Creature>(FindObjectsInactive.Include);
+            var rift = Object.FindAnyObjectByType<Rift>(FindObjectsInactive.Include);
             float seen = 0f;
             System.Func<bool> when = moment switch
             {
@@ -41,6 +67,16 @@ namespace Ricochet.Dev
                 "bolt" => () => motes.InFlightOf(LightMotes.Kind.Bolt) + motes.InFlightOf(LightMotes.Kind.Hex) > 0
                                 && (seen += Time.deltaTime) > 0.3f,
                 "drama" => () => drama.Active && (seen += Time.unscaledDeltaTime) > 0.3f,
+                // mid-spill: the board pouring out of the rift, about a third of it landed (InFlightOf counts queued seeds)
+                "seeds" => () => motes.InFlightOf(LightMotes.Kind.Seed) is > 0 and < 22,
+                "arrive" => () => sling.IsArriving && (seen += Time.deltaTime) > 0.35f, // the Spark flying out of the rift
+                "relic" => RelicMoment(director), // a relic acting: its glyph popping where it acted
+                // the kill: the creature seizing with its cracks blazing, then breaking apart, then the rift zipping shut
+                "seize" => () => creature.Dying && !creature.Shattered && (seen += Time.unscaledDeltaTime) > 0.5f,
+                "shatter" => () => creature.Shattered && (seen += Time.deltaTime) > 0.15f,
+                "zip" => () => rift.IsZipping && (seen += Time.deltaTime) > 0.3f,
+                // the Queen's crown streaming to the wall as gold light
+                "crown" => () => motes.InFlightOf(LightMotes.Kind.Crown) > 0 && (seen += Time.deltaTime) > 0.45f,
                 _ => null,
             };
             if (when == null) return "unknown moment";
@@ -48,7 +84,37 @@ namespace Ricochet.Dev
             return "freeze armed: " + moment;
         }
 
+        static System.Func<bool> RelicMoment(ShotDirector director)
+        {
+            float since = -1f;
+            director.RelicTriggered += (_, _) => { if (since < 0f) since = 0f; };
+            return () => since >= 0f && (since += Time.unscaledDeltaTime) > 0.18f;
+        }
+
         /// <summary>Fire the hero shot: the relaxed straight shot the board guarantees a cluster for.</summary>
+        /// <summary>Allow the Daily Rift in the Editor (and forget today's attempt): the next fresh run is today's daily.</summary>
+        public static string Daily(bool on)
+        {
+            DailyRift.DevEnable(on);
+            return $"daily {(on ? "on" : "off")} for the next run (today {DailyRift.Today}, gift {DailyRift.Gift(DailyRift.Today).spark.Name} + {DailyRift.Gift(DailyRift.Today).relic.Name})";
+        }
+
+        /// <summary>A recenter, as the headset would send it: the seat (sling, HUD) follows the head as it is now.</summary>
+        public static string Reseat()
+        {
+            var area = Object.FindAnyObjectByType<Ricochet.Room.PlayArea>();
+            area.Reseat();
+            return "seat " + area.Seat.position.ToString("F2") + " fwd " + area.Seat.forward.ToString("F2");
+        }
+
+        /// <summary>Play the next fresh runs at this Ascension tier in the Editor (0 = off).</summary>
+        public static string Ascension(int tier)
+        {
+            PlayerPrefs.SetInt(Gameplay.Ascension.DevKey, Mathf.Clamp(tier, 0, Gameplay.Ascension.Max));
+            PlayerPrefs.Save();
+            return "editor ascension " + PlayerPrefs.GetInt(Gameplay.Ascension.DevKey, 0) + " (unlocked on device: " + Gameplay.Ascension.Unlocked + ")";
+        }
+
         public static string FireHero()
         {
             var sling = Object.FindAnyObjectByType<Sling>();
@@ -165,26 +231,29 @@ namespace Ricochet.Dev
             }
             if (target == null) return "no " + want + " on the board";
             Vector3 p = target.transform.position;
-            // Clear the lane: pop crystals near the flight line, but keep the target's neighbourhood (a Bomb's blast).
+            // Aim like Look and Fire does (the exact low-arc solve), then clear the lane along that arc.
+            sling.SolveShot(p, out Vector3 aim, out float pull);
+            Vector3 from = sling.LaunchPoint(sling.transform.position, aim, pull);
+            Vector3 v = sling.VelocityFor(aim, pull);
+            float g = spark.GravityAcceleration;
+            float flight = Vector3.ProjectOnPlane(p - from, Vector3.up).magnitude /
+                           Mathf.Max(0.1f, Vector3.ProjectOnPlane(v, Vector3.up).magnitude);
+            // Only what the arc meets before it reaches the target goes; crystals beside and behind it stay.
             int cleared = 0;
+            float before = Mathf.Max(0f, flight - 0.12f / Mathf.Max(0.1f, v.magnitude));
             for (int i = 0; i < active.Count; i++)
             {
                 var c = active[i];
                 if (c == target || c.IsPopped) continue;
                 Vector3 q = c.transform.position;
-                if ((q - p).sqrMagnitude < 0.5f * 0.5f) continue;
-                Vector3 seg = p - origin;
-                float h = Mathf.Clamp01(Vector3.Dot(q - origin, seg) / seg.sqrMagnitude);
-                if ((origin + seg * h - q).sqrMagnitude < 0.15f * 0.15f) { c.Pop(); cleared++; }
+                for (int k = 1; k <= 32; k++)
+                {
+                    float t = before * k / 32f;
+                    Vector3 at = from + v * t + Vector3.down * (0.5f * g * t * t);
+                    if ((at - q).sqrMagnitude < 0.17f * 0.17f) { c.Pop(); cleared++; break; }
+                }
             }
-            float speed = sling.VelocityFor(Vector3.forward, 1f).magnitude;
-            Vector3 aim = p - origin;
-            for (int k = 0; k < 2; k++)
-            {
-                float t = (p - origin).magnitude / speed;
-                aim = p + Vector3.up * (0.5f * spark.GravityAcceleration * t * t) - origin;
-            }
-            return $"{want} at {Mathf.Sqrt(best):F2} m (cleared {cleared}), fired={sling.FireForTest(aim, 1f)}";
+            return $"{want} at {Mathf.Sqrt(best):F2} m (cleared {cleared}), fired={sling.FireForTest(aim, pull)}";
         }
 
         /// <summary>
