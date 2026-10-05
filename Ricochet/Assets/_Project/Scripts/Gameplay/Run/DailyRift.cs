@@ -15,6 +15,7 @@ namespace Ricochet.Gameplay
     public static class DailyRift
     {
         const string PlayedKey = "Ricochet.DailyPlayed";
+        const string FirstRunKey = "Ricochet.FirstRunOver";
         const string BestKeyPrefix = "Ricochet.DailyBest.";
         public const string DevKey = "Ricochet.DevDaily";
 
@@ -28,9 +29,21 @@ namespace Ricochet.Gameplay
             }
         }
 
-        /// <summary>Today's Daily Rift hasn't been started yet (and, in the Editor, the dev switch is on).</summary>
-        public static bool Due =>
-            (!Application.isEditor || PlayerPrefs.GetInt(DevKey, 0) == 1) && PlayerPrefs.GetInt(PlayedKey, 0) != Today;
+        /// <summary>
+        /// Today's Daily Rift hasn't been started yet, and this isn't the player's very first run (that one is the plain
+        /// game: a gift and a gold rift are two more things to learn before the first shot). In the Editor: the dev switch.
+        /// </summary>
+        public static bool Due => Application.isEditor
+            ? PlayerPrefs.GetInt(DevKey, 0) == 1 && PlayerPrefs.GetInt(PlayedKey, 0) != Today
+            : PlayerPrefs.GetInt(FirstRunKey, 0) == 1 && PlayerPrefs.GetInt(PlayedKey, 0) != Today;
+
+        /// <summary>A run has ended (won or lost): from now on the first run of each day is the Daily Rift.</summary>
+        public static void MarkRunOver()
+        {
+            if (PlayerPrefs.GetInt(FirstRunKey, 0) == 1) return;
+            PlayerPrefs.SetInt(FirstRunKey, 1);
+            PlayerPrefs.Save();
+        }
 
         /// <summary>A well-mixed seed from the date, so neighbouring days differ completely.</summary>
         public static int Seed(int date)

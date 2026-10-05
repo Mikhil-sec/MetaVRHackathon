@@ -19,7 +19,7 @@ Cracks of light open in the walls of your home, and small void creatures push th
 - **Five crystal kinds**, told apart by silhouette as well as colour: Gold (critical), Amp (multiplier), Bomb (area), Prism (fresh board) and Normal.
 - **Focus:** glance at a crystal while aiming and a hit on it is critical (eye gaze where the headset has it, head gaze everywhere else).
 - **Your room keeps score:** when the Queen falls, her crown streams as gold light to the wall where her rift opened and grows there, spatially anchored, so over weeks your walls become a trophy shelf.
-- **Daily Rift:** the first run of each day is the same run for everyone: same seed, same starting gift, same rewards, on a dawn-gold rift.
+- **Daily Rift:** after your first run, the first run of each day is the same run for everyone: same seed, same starting gift, same rewards, on a dawn-gold rift. (Your very first run is the plain game, so there is less to learn before the first shot.)
 - **Ascension:** every run you complete makes the next one a tier harder (up to five), marked by chevrons beside your shield.
 
 ## Why it only works in mixed reality
@@ -40,8 +40,8 @@ The room dims, a hairline crack splits your real wall, the crystals spill out of
 
 ## How we built it
 - **Unity 6 (URP) with Meta XR SDK v207:** MRUK, Interaction SDK hands, OpenXR eye gaze, spatial anchors, passthrough, Meta XR Audio, and the Platform SDK (leaderboards).
-- **Built without a headset.** Every feature was developed and verified in **Meta XR Simulator** with the **XR Operator** driving synthetic hands through real pinch, pull and release gestures, judged from composited passthrough captures.
-- **An automated room sweep** runs the board generator on all 50 bundled MRUK room layouts and fires thousands of simulated shots per pass. Targets: an aimed shot hits in at least 90% of attempts, the straight first shot hits in 49 of 50 rooms, and no Spark escapes the room.
+- **Built without a headset.** Every feature was developed and verified in **Meta XR Simulator** with the **XR Operator** driving synthetic hands through real pinch, pull and release gestures, judged from composited passthrough captures. The release build itself was played the same way outside the editor (a Windows player on the simulator, hands only), from a fresh install through a hand-fired kill, a hand-picked reward and a resumed run.
+- **An automated room sweep** runs the board generator on all 50 bundled MRUK room layouts and fires thousands of simulated shots per pass. Targets: an aimed shot hits in at least 90% of attempts, the straight first shot hits in 47 of 50 rooms, and no Spark escapes the room.
 - **Performance first:** about 50–60 draw calls in play against a 150 budget, a few thousand triangles, no post-processing (all glow is faked in shaders), and zero garbage per frame, measured with a profiler probe we wrote.
 - **Everything is original and procedural:** all shaders (creatures that crack with damage and shatter, a rift that tears open and zips shut, comet-like motes), all sound effects synthesized at startup, and music generated from the same pentatonic scale as the combo notes.
 

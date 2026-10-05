@@ -33,6 +33,7 @@ namespace Ricochet.Gameplay
         [SerializeField] Banner _banner;
         [SerializeField] Trophies _trophies;
         [SerializeField] MusicBed _music;
+        [SerializeField] PassthroughMood _mood;          // the room's lights go down for Fever's fireworks
 
         [Header("Rules")]
         [SerializeField] int _maxShield = 30;
@@ -41,6 +42,8 @@ namespace Ricochet.Gameplay
         // one damage), which starved weaker players (soak test, session 11); every fresh board has a guaranteed hero shot.
         [SerializeField] int _refreshBelow = 16;
         [SerializeField] int _feverPoints = 50;
+        [SerializeField] int _feverConfetti = 6;        // light flakes tossed up by each crystal Fever shatters
+        [SerializeField] int _fireworkConfetti = 40;    // flakes per firework as Fever peaks (plus its shell of streaks)
         [SerializeField] int _aegisShield = 10;
         [SerializeField] int _thornDamage = 2;
         [SerializeField] int _goldRushExtra = 3;
@@ -594,7 +597,7 @@ namespace Ricochet.Gameplay
 
             SetShield(_run.Shield + _shieldRestore);
             if (_music != null) _music.SetIntensity(0f);
-            yield return WaitReal(1.2f);
+            yield return WaitReal(1.6f); // the fireworks have the room before the rewards rise
 
             // Between rifts: three rewards float up in front of you; pinch one, draw it in, let go.
             _run.Encounter++;
@@ -637,15 +640,52 @@ namespace Ricochet.Gameplay
                 }
                 c.Light();
                 c.Pop();
-                if (_fx != null) _fx.Burst(p, _shardColor);
+                if (_fx != null) { _fx.Burst(p, _shardColor); _fx.Confetti(p, _feverConfetti); }
                 _glow.Pulse(p, _victoryGlow * 0.6f, 0.8f, 0.5f);
                 if (i % 2 == 0) _sfx.PlayComboNote(i / 2 % 15, p);
                 _director.AddScore(_feverPoints);
-                if (_popups != null && i % 3 == 0) _popups.Show(p, _feverPoints, Mathf.Min(i, 8));
+                if (_popups != null && i % 3 == 0) _popups.Show(p, _feverPoints, Mathf.Min(i, 3)); // modest: the fireworks follow
             }
             Vector3 center = _playArea.Seat.position + _playArea.Seat.forward * 2f;
             _glow.Pulse(center, _victoryGlow, 4f, 1.8f);
             _sfx.PlayChord(center);
+            StartCoroutine(Fireworks(at));
+        }
+
+        // Fever peaks with three fireworks of light confetti: over where the creature fell, then either side of it,
+        // staggered, each in its own colour, all inside the forward view and short of the walls.
+        static readonly float[] FireworkYaw = { 0f, -15f, 15f };
+        static readonly float[] FireworkLift = { 0.3f, 0.12f, 0.2f };
+        static readonly Color[] FireworkGlow = { new(0.45f, 1.2f, 1.5f), new(1.5f, 0.5f, 1.2f), new(1.5f, 1.1f, 0.45f) };
+        static readonly Color[] FireworkColor = { new(0.35f, 0.9f, 1f), new(1f, 0.36f, 0.85f), new(1f, 0.78f, 0.3f) };
+
+        IEnumerator Fireworks(Vector3 at)
+        {
+            if (_fx == null) yield break;
+            // Like real fireworks they wait for the dark: the room's warm pulse peaks, then its lights go down, then
+            // the show; the room comes back up as the rewards rise.
+            yield return WaitReal(0.25f);
+            if (_mood != null) _mood.SetFocus(0.85f);
+            yield return WaitReal(0.3f);
+            Vector3 eye = _playArea.Seat.position, forward = _playArea.Seat.forward;
+            Vector3 flat = Vector3.ProjectOnPlane(at - eye, Vector3.up);
+            float aim = Mathf.Clamp(Vector3.SignedAngle(forward, flat, Vector3.up), -8f, 8f);
+            float reach = Mathf.Clamp(flat.magnitude, 1.6f, 2.8f);
+            for (int k = 0; k < FireworkYaw.Length; k++)
+            {
+                Vector3 dir = Quaternion.AngleAxis(aim + FireworkYaw[k], Vector3.up) * forward;
+                float d = reach;
+                if (_playArea.Room != null && _playArea.Room.Raycast(new Ray(eye, dir), d + 0.5f, out RaycastHit hit))
+                    d = Mathf.Max(1.2f, Mathf.Min(d, hit.distance - 0.5f));
+                Vector3 p = eye + dir * d + Vector3.up * FireworkLift[k];
+                // A full shell reaches ~1 m: closer to the eye it bursts smaller, so no streak comes within ~0.7 m.
+                _fx.Firework(p, FireworkColor[k], _fireworkConfetti, Mathf.Clamp((d - 0.7f) / 1.1f, 0.4f, 1f));
+                _glow.Pulse(p, FireworkGlow[k], 1.2f, 0.9f);
+                _sfx.PlaySparkle(p);
+                yield return WaitReal(0.22f);
+            }
+            yield return WaitReal(0.7f);
+            if (_mood != null) _mood.SetFocus(0f);
         }
 
         void Apply(Reward reward)
@@ -676,7 +716,6 @@ namespace Ricochet.Gameplay
             RunChanged?.Invoke();
         }
 
-        /// <summary>The Queen's crown stays on the wall where her rift was (behind a floating rift: the wall beyond it).</summary>
         /// <summary>Where the Queen's crown goes: her rift's wall (behind a floating rift: the wall beyond it).</summary>
         bool TrophySpot(out Vector3 position, out Vector3 normal)
         {
@@ -711,6 +750,7 @@ namespace Ricochet.Gameplay
         {
             Debug.Log($"[Ricochet] Run complete! score {_director.Score}, best chain {_director.BestCombo}");
             RunState.Clear();
+            DailyRift.MarkRunOver();
             Vector3 center = _playArea.Seat.position + _playArea.Seat.forward * 2f;
             for (int i = 0; i < 3; i++)
             {
@@ -727,7 +767,7 @@ namespace Ricochet.Gameplay
                 for (int i = 0; i < 6; i++)
                     _motes.Launch(LightMotes.Kind.Crown, 0, fell + UnityEngine.Random.insideUnitSphere * 0.08f, to, 0.07f * i, 0.8f, Vector3.up);
                 yield return WaitReal(1.3f);
-                _trophies.Place(crownAt, wallNormal, _director.Score, _director.BestCombo);
+                _trophies.Place(crownAt, wallNormal, _director.Score, _director.BestCombo, _run.Ascension);
             }
             string extra = RecordRun(true);
             if (_banner != null) _banner.Show(_run.Daily != 0 ? "Daily Rift sealed" : "Rift sealed",
@@ -743,6 +783,7 @@ namespace Ricochet.Gameplay
         {
             Debug.Log($"[Ricochet] Run lost at encounter {_run.Encounter + 1} (score {_director.Score})");
             RunState.Clear();
+            DailyRift.MarkRunOver();
             Vector3 heart = _sling.transform.position;
             _glow.Pulse(heart, _shieldHitGlow * 1.5f, 3f, 2f);
             _sfx.PlayShieldHit(heart);

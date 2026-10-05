@@ -190,6 +190,63 @@ namespace Ricochet.Audio
         }
 
         /// <summary>
+        /// A firework of light: a soft pop, then a crackle (tiny bright clicks scattered over about a second, densest
+        /// early) under a shimmer of high pentatonic pings, so it sits in the combo's key. Seeds give variations.
+        /// </summary>
+        public static AudioClip Sparkle(string name, int rootMidi, float seconds = 1.4f, int seed = 61)
+        {
+            const int Crackles = 64, Pings = 7;
+            int samples = Mathf.CeilToInt(seconds * SampleRate);
+            var data = new float[samples];
+            var rng = new System.Random(seed);
+            var crackleAt = new float[Crackles];
+            for (int c = 0; c < Crackles; c++)
+            {
+                float r = (float)rng.NextDouble();
+                crackleAt[c] = 0.06f + 0.9f * r * r;
+            }
+            System.Array.Sort(crackleAt);
+            var pingAt = new float[Pings];
+            var pingFreq = new float[Pings];
+            var pingAmp = new float[Pings];
+            for (int p = 0; p < Pings; p++)
+            {
+                float r = (float)rng.NextDouble();
+                pingAt[p] = 0.04f + 0.5f * r * r;
+                pingFreq[p] = NoteFrequency(rootMidi, 5 + rng.Next(8));
+                pingAmp[p] = 0.5f + 0.5f * (float)rng.NextDouble();
+            }
+            float lp = 0f, hp = 0f, clickEnv = 0f, popPhase = 0f;
+            float clickDecay = Mathf.Exp(-1f / (0.0025f * SampleRate));
+            int next = 0;
+            for (int i = 0; i < samples; i++)
+            {
+                float t = (float)i / SampleRate;
+                // The pop: a short low thump (150 Hz falling fast) with a breath of noise.
+                popPhase += 2f * Mathf.PI * 150f * Mathf.Pow(0.5f, t / 0.05f) / SampleRate;
+                float n = (float)(rng.NextDouble() * 2.0 - 1.0);
+                lp += 0.25f * (n - lp);
+                float pop = Mathf.Sin(popPhase) * Mathf.Exp(-30f * t) * 0.7f + lp * Mathf.Exp(-45f * t) * 0.35f;
+                // The crackle: each click a few milliseconds of high-passed noise, thinning out as it goes.
+                while (next < Crackles && crackleAt[next] <= t) { clickEnv = 0.4f + 0.6f * (float)rng.NextDouble(); next++; }
+                clickEnv *= clickDecay;
+                hp += 0.5f * (n - hp);
+                float crackle = (n - hp) * clickEnv * (1f - 0.6f * t / seconds);
+                float pings = 0f;
+                for (int p = 0; p < Pings; p++)
+                {
+                    float u = t - pingAt[p];
+                    if (u > 0f) pings += Mathf.Sin(2f * Mathf.PI * pingFreq[p] * u) * pingAmp[p] * Mathf.Exp(-7f * u) * Mathf.Clamp01(u / 0.004f);
+                }
+                float env = Mathf.Clamp01((seconds - t) / 0.08f);
+                data[i] = (pop + crackle * 0.8f + pings * 0.12f) * env * 0.5f;
+            }
+            var clip = AudioClip.Create(name, samples, 1, SampleRate, false);
+            clip.SetData(data, 0);
+            return clip;
+        }
+
+        /// <summary>
         /// Something made of light breaking: a low boom falling an octave, a short noise burst, and a spray of glassy
         /// pings (short high partials at scattered onsets, densest at the start).
         /// </summary>

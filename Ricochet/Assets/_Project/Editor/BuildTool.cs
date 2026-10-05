@@ -17,6 +17,9 @@ namespace Ricochet.EditorTools
         public const string ApkPath = OutDir + "/Ricochet.apk";
         public const string ReportPath = OutDir + "/build_report.txt";
 
+        public const string WinExePath = OutDir + "/win/Ricochet.exe";
+        public const string WinReportPath = OutDir + "/win_report.txt";
+
         public static string BuildApk(bool development = false)
         {
             Directory.CreateDirectory(OutDir);
@@ -30,7 +33,32 @@ namespace Ricochet.EditorTools
                 targetGroup = BuildTargetGroup.Android,
                 options = development ? BuildOptions.Development : BuildOptions.None,
             };
-            var report = BuildPipeline.BuildPlayer(options);
+            return Report(BuildPipeline.BuildPlayer(options), ReportPath);
+        }
+
+        /// <summary>
+        /// A Windows player for a smoke test outside the Editor: with the Meta XR Simulator as the machine's OpenXR
+        /// runtime it runs the device code paths the Editor never takes (Application.isEditor branches: device room
+        /// load, depth-only hands, resume, the real Daily Rift and Ascension) and proves the build carries its
+        /// shaders, fonts and Resources. Switches the active target to Windows; BuildApk switches back.
+        /// </summary>
+        public static string BuildWindows()
+        {
+            Directory.CreateDirectory(OutDir + "/win");
+            if (File.Exists(WinReportPath)) File.Delete(WinReportPath);
+            var options = new BuildPlayerOptions
+            {
+                scenes = new[] { "Assets/_Project/Scenes/Main.unity" },
+                locationPathName = WinExePath,
+                target = BuildTarget.StandaloneWindows64,
+                targetGroup = BuildTargetGroup.Standalone,
+                options = BuildOptions.None,
+            };
+            return Report(BuildPipeline.BuildPlayer(options), WinReportPath);
+        }
+
+        static string Report(BuildReport report, string path)
+        {
             var s = report.summary;
             var text = new StringBuilder();
             text.AppendLine($"result {s.result}  time {s.totalTime:mm\\:ss}  size {s.totalSize / 1048576f:F1} MB  errors {s.totalErrors}  warnings {s.totalWarnings}");
@@ -40,7 +68,7 @@ namespace Ricochet.EditorTools
                 foreach (var m in step.messages)
                     if ((m.type == LogType.Error || m.type == LogType.Exception) && shown++ < 20)
                         text.AppendLine("ERROR " + m.content.Split('\n')[0]);
-            File.WriteAllText(ReportPath, text.ToString());
+            File.WriteAllText(path, text.ToString());
             return text.ToString();
         }
     }

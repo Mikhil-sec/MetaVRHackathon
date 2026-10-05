@@ -70,6 +70,9 @@ namespace Ricochet.Gameplay
         // Colliders passed through this shot (Ghost furniture, Heavy crystals): restored when the flight ends.
         readonly Collider[] _ignored = new Collider[48];
         int _ignoredCount;
+        // The furniture the player sits in (ShotDirector.IgnoreSeatFurniture): never touched, every flight.
+        readonly Collider[] _seat = new Collider[8];
+        int _seatCount;
         Vector3 _preStepVelocity;
         int _ghostCharges, _floorGrace;
         float _kindScale = 1f;
@@ -238,6 +241,7 @@ namespace Ricochet.Gameplay
         public void Launch(Vector3 velocity)
         {
             if (_ignoredCount > 0) RestoreIgnored();
+            IgnoreSeat();
             _flightTime = 0f;
             _slowTime = 0f;
             _squash = 0f;
@@ -395,6 +399,29 @@ namespace Ricochet.Gameplay
             Physics.IgnoreCollision(_collider, other, true);
             if (_ignoredCount < _ignored.Length) _ignored[_ignoredCount++] = other;
             _body.linearVelocity = _preStepVelocity * keep;
+        }
+
+        /// <summary>The furniture the player sits in: this Spark never collides with it (replaces the previous set).</summary>
+        public void SetSeatFurniture(Collider[] colliders, int count)
+        {
+            bool active = _collider != null && _collider.gameObject.activeInHierarchy;
+            for (int i = 0; i < _seatCount; i++)
+            {
+                if (active && _seat[i] != null && _seat[i].gameObject.activeInHierarchy) Physics.IgnoreCollision(_collider, _seat[i], false);
+                _seat[i] = null;
+            }
+            _seatCount = Mathf.Min(count, _seat.Length);
+            for (int i = 0; i < _seatCount; i++) _seat[i] = colliders[i];
+            IgnoreSeat();
+        }
+
+        // Applied again at every launch: Unity drops an ignore whenever either collider is deactivated (the pooled
+        // Splitter children, predictions), and refuses (with an error) to set one on an inactive collider.
+        void IgnoreSeat()
+        {
+            if (_collider == null || !_collider.gameObject.activeInHierarchy) return;
+            for (int i = 0; i < _seatCount; i++)
+                if (_seat[i] != null && _seat[i].gameObject.activeInHierarchy) Physics.IgnoreCollision(_collider, _seat[i], true);
         }
 
         void RestoreIgnored()

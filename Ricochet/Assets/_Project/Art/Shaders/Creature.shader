@@ -138,8 +138,9 @@ Shader "Ricochet/Creature"
                 // Facets catch a little of the rim color so the silhouette has form, not a flat hole.
                 float facet = 0.05 * saturate(n.y * 0.5 + 0.5);
                 float energy = UNITY_ACCESS_INSTANCED_PROP(Props, _Energy);
-                // Keep the magenta identity; the intent only colours the edge, and more so as it winds up.
-                float3 rimColor = lerp(_RimColor.rgb, tint.rgb, 0.35 + 0.4 * energy);
+                // Keep the creature's identity; the intent only colours the edge, a little more as it winds up (never
+                // more than 60%: past that every creature reads as the same blob in its intent color).
+                float3 rimColor = lerp(_RimColor.rgb, tint.rgb, 0.35 + 0.25 * energy);
                 float3 rgb = _InkColor.rgb + rimColor * (fresnel * 1.3 + facet);
 
                 // The void inside: a star field seen through the ink, strongest face-on (it sits "behind" the rim).

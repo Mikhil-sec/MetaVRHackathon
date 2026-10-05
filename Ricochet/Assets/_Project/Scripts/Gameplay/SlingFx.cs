@@ -31,6 +31,7 @@ namespace Ricochet.Gameplay
         [SerializeField] Renderer _ripple;
         [SerializeField] Renderer _flash;
         [SerializeField] Renderer[] _tips = new Renderer[MaxTips];
+        [SerializeField] RewardPicker _picker;  // the empty sling steps aside while you choose: its band crossed the centre orb's words
 
         [Header("Look")]
         [SerializeField] Color _idle = new(0.35f, 0.85f, 1f);
@@ -70,6 +71,7 @@ namespace Ricochet.Gameplay
         float _idleTime, _rippleClock = -1f;
         float _flashTime = 1f, _flashPower;
         float _grabPop;
+        float _aside;                 // 1 while a reward choice is open
         int _pullStep = -1;
         int _tipCount;
 
@@ -144,6 +146,7 @@ namespace Ricochet.Gameplay
             _hover = Mathf.Lerp(_hover, ready ? _sling.HoverProximity : 0f, 1f - Mathf.Exp(-14f * dt));
             _heat = Mathf.Lerp(_heat, pulling ? _sling.Charge : 0f, 1f - Mathf.Exp(-(pulling ? 20f : 6f) * dt));
             _grabPop = Mathf.Max(0f, _grabPop - dt * 5f);
+            _aside = Mathf.MoveTowards(_aside, _picker != null && _picker.IsChoosing ? 1f : 0f, dt * 4f);
             if (pulling) _lastPull = _sling.PullVector;
 
             // Pouch: the Spark while it sits on the sling (bent by the cancel spring), the bare band once it flies.
@@ -211,11 +214,12 @@ namespace Ricochet.Gameplay
             _band.startColor = c;
             _band.endColor = c;
             _mpb.Clear();
-            _mpb.SetFloat(IntensityId, 1.2f * bright);
+            float shown = 1f - 0.85f * _aside;
+            _mpb.SetFloat(IntensityId, 1.2f * bright * shown);
             _band.SetPropertyBlock(_mpb);
             _band.widthMultiplier = Mathf.Lerp(_bandWidthRest, _bandWidthTaut, Mathf.Clamp01(stretch / 0.2f));
 
-            float postGlow = 0.8f + 0.6f * _hover + 1.6f * _heat;
+            float postGlow = (0.8f + 0.6f * _hover + 1.6f * _heat) * shown;
             SetHalo(_postLeft, left, Color.Lerp(_idle, _hot, _heat), postGlow);
             SetHalo(_postRight, rightPost, Color.Lerp(_idle, _hot, _heat), postGlow);
         }

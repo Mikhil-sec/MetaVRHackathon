@@ -64,6 +64,7 @@ Material:
     - _Intensity: 1.6
     - _Mode: 0
     - _QueueOffset: 0
+    - _Shape: 0
     - _SoftParticlesEnabled: 0
     - _SoftParticlesFarFadeDistance: 1
     - _SoftParticlesNearFadeDistance: 0

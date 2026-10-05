@@ -43,6 +43,7 @@ namespace Ricochet.Gameplay
         [SerializeField] int _max = 12;                 // the oldest crown makes way (its anchor is erased)
         [SerializeField] float _crystalSize = 0.1f;     // ~16 cm crown: findable on a wall 3-5 m away
         [SerializeField] Color _gold = new(1f, 0.8f, 0.38f);
+        [SerializeField] Color _tierColor = new(1f, 0.24f, 0.2f);  // a ruby ember (Ascension's colour, deeper)
 
         [Serializable]
         sealed class Record
@@ -50,6 +51,7 @@ namespace Ricochet.Gameplay
             public string Uuid = "";
             public int Score;
             public int Chain;
+            public int Tier;                            // the Ascension tier the run was won at
             public string Date = "";
             public string Room = "";                    // the stored pose only means something in the same room
                                                         // (PocketArena.RoomKey: the pose is in the seat's frame)
@@ -160,13 +162,14 @@ namespace Ricochet.Gameplay
         }
 
         /// <summary>A sealed boss: a crown grows out of the wall where the rift was, and is anchored there.</summary>
-        public async void Place(Vector3 position, Vector3 wallNormal, int score, int chain)
+        public async void Place(Vector3 position, Vector3 wallNormal, int score, int chain, int tier)
         {
             position = FreeSlot(position, wallNormal);
             var record = new Record
             {
                 Score = score,
                 Chain = chain,
+                Tier = tier,
                 Date = DateTime.Now.ToString("yyyy-MM-dd"),
                 Room = RoomName,
                 Position = position + wallNormal * 0.03f,
@@ -279,10 +282,13 @@ namespace Ricochet.Gameplay
             // A crown: five gold crystals fanned up and out of the wall, the middle one tallest, an iridescent jewel at
             // their root (the focal point: hue contrast against all that gold), star glints on the tips, and a
             // breathing halo *behind* the crystals so it lights the wall rather than washing out the facets.
+            // A run won at a higher Ascension tier stands taller and wears a band of ember gems, one per tier.
+            int tier = Mathf.Clamp(record.Tier, 0, Ascension.Max);
+            float grand = 1f + 0.07f * tier;
             for (int i = 0; i < 5; i++)
             {
                 float a = (i - 2) * 26f;                      // degrees from straight up, in the wall's plane
-                float tall = i == 2 ? 1.3f : i == 1 || i == 3 ? 1.1f : 0.9f;
+                float tall = (i == 2 ? 1.3f : i == 1 || i == 3 ? 1.1f : 0.9f) * grand;
                 Quaternion fan = Quaternion.AngleAxis(-a, Vector3.forward);
                 // The crystal's long axis is its local up: fan it out, then lean it out of the wall a little.
                 Quaternion rot = fan * Quaternion.AngleAxis(-18f, Vector3.right);
@@ -293,6 +299,15 @@ namespace Ricochet.Gameplay
             }
             Crystal(root, new Vector3(0f, -0.004f, 0.045f), Quaternion.AngleAxis(-62f, Vector3.right),
                     Vector3.one * (_crystalSize * 0.55f), CrystalKind.Prism, Color.white, 0.25f);
+            // Brilliant-cut gems set in a band that curves up around the crown's base under the jewel, tables out of
+            // the wall and tipped a little each way so their facets catch the light.
+            for (int t = 0; t < tier; t++)
+            {
+                float x = (t - (tier - 1) * 0.5f) / 2.5f;          // -1 .. 1 across five tiers
+                Crystal(root, new Vector3(x * 0.062f, -0.03f + 0.014f * x * x, 0.03f),
+                        Quaternion.AngleAxis(-x * 22f, Vector3.forward) * Quaternion.AngleAxis(70f, Vector3.right),
+                        Vector3.one * (_crystalSize * 0.26f), CrystalKind.Gold, _tierColor, 0.5f, CrystalMesh.Get(CrystalKind.Gold));
+            }
             Quad(root, "Halo", _haloMaterial, new Vector3(0f, 0.045f, 0f), 0.36f); // a warm pool on the wall: findable from the seat
 
             var shown = new Shown { Record = record, Root = root, Grow = grow };
@@ -303,13 +318,14 @@ namespace Ricochet.Gameplay
             return shown;
         }
 
-        void Crystal(Transform root, Vector3 pos, Quaternion rot, Vector3 scale, CrystalKind kind, Color color, float glow)
+        void Crystal(Transform root, Vector3 pos, Quaternion rot, Vector3 scale, CrystalKind kind, Color color, float glow,
+                     Mesh mesh = null)
         {
             var go = new GameObject("Crystal");
             go.transform.SetParent(root, false);
             go.transform.SetLocalPositionAndRotation(pos, rot);
             go.transform.localScale = scale;
-            go.AddComponent<MeshFilter>().sharedMesh = _crystalMesh;
+            go.AddComponent<MeshFilter>().sharedMesh = mesh != null ? mesh : _crystalMesh;
             var r = go.AddComponent<MeshRenderer>();
             r.sharedMaterial = _crystalMaterial;
             r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;

@@ -13,6 +13,8 @@ namespace Ricochet.Gameplay
     ///                  yesterday's); the date rides along as extra data.
     ///   "best_run"   - the best score of any run (kept only when it improves).
     /// Device builds with an App ID only: until the Dashboard app exists (or in the Editor) every call just logs.
+    /// The same start-up runs the store's entitlement check (within 10 s of launch, no network needed): a player who
+    /// isn't entitled, or a Platform SDK that fails to start, may not play on, so the app quits (Meta's own pattern).
     /// </summary>
     public static class Leaderboard
     {
@@ -38,19 +40,27 @@ namespace Ricochet.Gameplay
                 {
                     if (init.IsError)
                     {
-                        Debug.LogWarning($"[Ricochet] Platform init failed: {init.GetError().Message}");
+                        Debug.LogError($"[Ricochet] Platform init failed: {init.GetError().Message}; quitting");
+                        UnityEngine.Application.Quit();
                         return;
                     }
                     Entitlements.IsUserEntitledToApplication().OnComplete(check =>
                     {
-                        _ready = !check.IsError;
-                        Debug.Log($"[Ricochet] Platform ready: entitled={_ready}");
+                        if (check.IsError)
+                        {
+                            Debug.LogError($"[Ricochet] Entitlement check failed: {check.GetError().Message}; quitting");
+                            UnityEngine.Application.Quit();
+                            return;
+                        }
+                        _ready = true;
+                        Debug.Log("[Ricochet] Platform ready: entitled");
                     });
                 });
             }
             catch (Exception e)
             {
-                Debug.LogWarning($"[Ricochet] Platform init threw: {e.Message}");
+                Debug.LogError($"[Ricochet] Platform init threw: {e.Message}; quitting");
+                UnityEngine.Application.Quit();
             }
 #endif
         }

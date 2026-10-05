@@ -295,10 +295,19 @@ namespace Ricochet.Room
 
             Pose best = new(room.GetRoomBounds().center, Quaternion.identity);
             float bestScore = -1f;
-            for (int candidate = 0; candidate < 6; candidate++)
+            // Six candidate spots with somewhere to face; a cluttered room may need more draws to find them. MRUK
+            // gives up on a draw after 1000 tries, so two empty draws in a row mean the room has no more to give.
+            for (int candidate = 0, usable = 0, empty = 0; candidate < 40 && usable < 6; candidate++)
             {
-                Vector3 floor = room.GenerateRandomPositionInRoom(0.6f, true) ?? room.GetRoomBounds().center;
-                Vector3 eye = new(floor.x, floorY + SeatedEyeHeight, floor.z);
+                Vector3? sample = room.GenerateRandomPositionInRoom(0.6f, true);
+                if (!sample.HasValue)
+                {
+                    if (++empty >= 2) break;
+                    continue;
+                }
+                empty = 0;
+                Vector3 eye = new(sample.Value.x, floorY + SeatedEyeHeight, sample.Value.z);
+                bool counted = false;
                 for (int i = 0; i < 16; i++)
                 {
                     Vector3 dir = Quaternion.Euler(0f, i * 22.5f, 0f) * Vector3.forward;
@@ -319,6 +328,7 @@ namespace Ricochet.Room
                         }
                         score += free;
                     }
+                    if (score >= 0f && !counted) { counted = true; usable++; }
                     if (score > bestScore) { bestScore = score; best = new Pose(eye, Quaternion.LookRotation(dir, Vector3.up)); }
                 }
             }

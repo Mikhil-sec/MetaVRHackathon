@@ -46,6 +46,7 @@ namespace Ricochet.Gameplay
         readonly Transform[] _features = new Transform[MaxFeatures];        // eyes and mouth, per CreatureDef.Face
         readonly MeshRenderer[] _featureRenderers = new MeshRenderer[MaxFeatures];
         readonly Vector3[] _featureHome = new Vector3[MaxFeatures];           // body-local, from the silhouette
+        readonly Color[] _featureColor = new Color[MaxFeatures];
         Feature[] _face = Feature.TwoEyes;
         MaterialPropertyBlock _eyeBlock;
         readonly Transform[] _shards = new Transform[6]; // 3 orbit a creature; the boss stands all 6 up as a crown
@@ -208,8 +209,9 @@ namespace Ricochet.Gameplay
                 // Just proud of the surface along the feature's direction, so the body never hides it.
                 Vector3 dir = _face[i].Direction;
                 _featureHome[i] = EncounterMeshes.SurfacePoint(dir, def.Body) + dir * 0.09f;
+                _featureColor[i] = _face[i].Mouth ? def.MouthColor : def.EyeColor;
                 _eyeBlock.Clear();
-                _eyeBlock.SetColor(ColorId, _face[i].Mouth ? def.MouthColor : def.EyeColor);
+                _eyeBlock.SetColor(ColorId, _featureColor[i]);
                 _featureRenderers[i].SetPropertyBlock(_eyeBlock);
             }
             _boss = def.Boss;
@@ -444,10 +446,16 @@ namespace Ricochet.Gameplay
                 float size = feature.Size * (feature.Mouth ? s : eyeK);
                 float height = feature.Mouth ? feature.Size * gape : size;
                 _features[i].localScale = new Vector3(size * feature.Stretch, height, size);
+                // The windup lights the face: eyes and visor burn toward the intent color, a mouth blazes in its own.
+                Color fc = feature.Mouth ? _featureColor[i] : Color.Lerp(_featureColor[i], _tint, 0.5f * _windup);
+                _eyeBlock.Clear();
+                _eyeBlock.SetColor(ColorId, fc * (1f + 1.3f * _windup));
+                _featureRenderers[i].SetPropertyBlock(_eyeBlock);
             }
 
-            // Body shader: telegraph tint, white-hot flash on hits.
-            float tintBoost = 1f + 1.5f * _windup;
+            // Body shader: telegraph tint, white-hot flash on hits. Modest, so the creature's own hue survives its windup
+            // (at 2.5x every creature became the same glowing blob in its intent color); the face carries the rest.
+            float tintBoost = 1f + 0.6f * _windup;
             _block.Clear();
             _block.SetColor(TintId, _tint * tintBoost);
             _block.SetFloat(FlashId, _flash);

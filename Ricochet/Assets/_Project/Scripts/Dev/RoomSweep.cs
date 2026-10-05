@@ -106,6 +106,8 @@ namespace Ricochet.Dev
             _sling = FindAnyObjectByType<Sling>();
             _spark = FindAnyObjectByType<Spark>(FindObjectsInactive.Include);
             _board = FindAnyObjectByType<BoardGenerator>();
+            var rig = FindAnyObjectByType<OVRCameraRig>();
+            var effectMesh = FindAnyObjectByType<EffectMesh>();
             director.enabled = false;
             _sling.enabled = false;
             _spark.gameObject.SetActive(true);
@@ -128,14 +130,36 @@ namespace Ricochet.Dev
             for (int r = 0; r < roomCount; r++)
             {
                 Status = $"room {r + 1}/{roomCount}";
+                // A prefab room lands relative to the camera rig's pose at load time, and desktop Play moves the rig
+                // to each loaded room's own seat (the first one a random room): park it, or every run lays out,
+                // seats and so sweeps each room differently.
+                if (rig != null) rig.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
                 var load = mruk.LoadSceneFromPrefab(prefabs[r]);
                 while (!load.IsCompleted) yield return null;
                 for (int f = 0; f < 6; f++) yield return null; // let EffectMesh build its colliders
                 Physics.SyncTransforms();
 
-                MRUKRoom room = mruk.GetCurrentRoom();
+                // Multi-room layouts: the largest room (GetCurrentRoom follows the head, which desktop Play moves).
+                MRUKRoom room = null;
+                float biggest = -1f;
+                foreach (var candidate in mruk.Rooms)
+                {
+                    Vector3 size = candidate.GetRoomBounds().size;
+                    if (size.x * size.z > biggest) { biggest = size.x * size.z; room = candidate; }
+                }
+                if (room == null) room = mruk.GetCurrentRoom();
+                // EffectMesh built its colliders for the room the head was in at load time (a race with the rig
+                // moving): rebuild them for the swept room.
+                if (effectMesh != null && room != null)
+                {
+                    effectMesh.DestroyMesh();
+                    effectMesh.CreateMesh(room);
+                    yield return null;
+                    Physics.SyncTransforms();
+                }
                 int seed = StableSeed(prefabs[r].name); // per room, independent of list order, so failures reproduce
                 Pose seat = PlayArea.ChooseSeat(room, seed);
+                director.IgnoreSeatFurniture(room, seat);
                 // Same order as the encounter: the board, then the rift clear of the hero cluster, then the rift's
                 // patch of wall is cleared of crystals.
                 _board.SetExclusion(Vector3.zero, 0f);

@@ -60,6 +60,7 @@ namespace Ricochet.Dev
             var sling = Object.FindAnyObjectByType<Sling>();
             var creature = Object.FindAnyObjectByType<Creature>(FindObjectsInactive.Include);
             var rift = Object.FindAnyObjectByType<Rift>(FindObjectsInactive.Include);
+            var fx = Object.FindAnyObjectByType<ShatterFx>();
             float seen = 0f;
             System.Func<bool> when = moment switch
             {
@@ -77,6 +78,9 @@ namespace Ricochet.Dev
                 "zip" => () => rift.IsZipping && (seen += Time.deltaTime) > 0.3f,
                 // the Queen's crown streaming to the wall as gold light
                 "crown" => () => motes.InFlightOf(LightMotes.Kind.Crown) > 0 && (seen += Time.deltaTime) > 0.45f,
+                // Fever's fireworks: the first shell near its widest, then the confetti spreading out after them
+                "firework" => () => fx.ShellCount > 0 && (seen += Time.deltaTime) > 0.3f,
+                "confetti" => () => fx.ConfettiCount > 80 && (seen += Time.deltaTime) > 0.4f,
                 _ => null,
             };
             if (when == null) return "unknown moment";
@@ -91,7 +95,6 @@ namespace Ricochet.Dev
             return () => since >= 0f && (since += Time.unscaledDeltaTime) > 0.18f;
         }
 
-        /// <summary>Fire the hero shot: the relaxed straight shot the board guarantees a cluster for.</summary>
         /// <summary>Allow the Daily Rift in the Editor (and forget today's attempt): the next fresh run is today's daily.</summary>
         public static string Daily(bool on)
         {
@@ -115,6 +118,7 @@ namespace Ricochet.Dev
             return "editor ascension " + PlayerPrefs.GetInt(Gameplay.Ascension.DevKey, 0) + " (unlocked on device: " + Gameplay.Ascension.Unlocked + ")";
         }
 
+        /// <summary>Fire the hero shot: the relaxed straight shot the board guarantees a cluster for.</summary>
         public static string FireHero()
         {
             var sling = Object.FindAnyObjectByType<Sling>();
@@ -138,6 +142,28 @@ namespace Ricochet.Dev
             Vector3 at = creature != null ? creature.Center : Vector3.forward * 3f;
             RoomGlow.Instance.Wave(at, new Color(1.6f, 1.15f, 0.5f), speed, 0.16f, 9f);
             return "wave from " + at.ToString("F1");
+        }
+
+        /// <summary>Stages Fever's fireworks of light confetti over the creature (or ahead of the seat).</summary>
+        public static string Fireworks()
+        {
+            var encounter = Object.FindAnyObjectByType<EncounterDirector>();
+            var pa = Object.FindAnyObjectByType<Room.PlayArea>();
+            var creature = Object.FindAnyObjectByType<Creature>();
+            Vector3 at = creature != null ? creature.Center : pa.Seat.position + pa.Seat.forward * 2.5f;
+            var method = typeof(EncounterDirector).GetMethod("Fireworks", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            encounter.StartCoroutine((System.Collections.IEnumerator)method.Invoke(encounter, new object[] { at }));
+            return "fireworks over " + at.ToString("F1");
+        }
+
+        /// <summary>A trophy crown won at this Ascension tier, on the wall straight ahead (it is saved like a real one).</summary>
+        public static string Crown(int tier)
+        {
+            var pa = Object.FindAnyObjectByType<Room.PlayArea>();
+            var trophies = Object.FindAnyObjectByType<Trophies>();
+            if (!pa.Room.Raycast(new Ray(pa.Seat.position, pa.Seat.forward), 10f, out RaycastHit hit)) return "no wall ahead";
+            trophies.Place(hit.point, hit.normal, 1234, 9, tier);
+            return $"crown tier {tier} at {hit.point:F2}";
         }
 
         public static string TimeLogSummary() => s_timeLog != null ? s_timeLog.Summary() : "not recording";

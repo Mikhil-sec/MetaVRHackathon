@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using Meta.XR.MRUtilityKit;
 using Ricochet.Audio;
 using Ricochet.Input;
 using Ricochet.Room;
@@ -181,6 +182,49 @@ namespace Ricochet.Gameplay
             // Face the seat's forward so the band's posts sit left and right of the player (SlingFx).
             Vector3 flat = Vector3.ProjectOnPlane(_playArea.Seat.forward, Vector3.up);
             if (flat.sqrMagnitude > 1e-4f) _sling.transform.rotation = Quaternion.LookRotation(flat);
+            IgnoreSeatFurniture(_playArea.Room, _playArea.Seat);
+        }
+
+        readonly Collider[] _seatFurniture = new Collider[8];
+        readonly List<Collider> _anchorColliders = new();
+
+        /// <summary>
+        /// The furniture the player sits in. A scene volume is a box up to its highest point, so in a deep armchair or
+        /// on a couch with a tall back the sling, or the hand drawing it back, can be inside that box: every Spark
+        /// would hit it from the inside and die on launch. Sparks never collide with a volume that holds the sling or
+        /// a draw's launch point (a hand can't be inside a real desk, so a desk in front of you stays in play).
+        /// Call when the seat changes; the room sweep calls it per room.
+        /// </summary>
+        public void IgnoreSeatFurniture(MRUKRoom room, Pose seat)
+        {
+            int count = 0;
+            if (room != null)
+            {
+                Vector3 sling = SlingPosition(seat);
+                Vector3 hero = HeroDirection(seat);
+                foreach (var anchor in room.Anchors)
+                {
+                    if (anchor == null || !anchor.VolumeBounds.HasValue || !HoldsSling(anchor, sling, hero)) continue;
+                    anchor.GetComponentsInChildren(true, _anchorColliders);
+                    for (int i = 0; i < _anchorColliders.Count && count < _seatFurniture.Length; i++) _seatFurniture[count++] = _anchorColliders[i];
+                    Debug.Log($"[Ricochet] Seat furniture: {anchor.Label} holds the sling, the Spark passes through it ({_anchorColliders.Count} colliders)");
+                }
+            }
+            _spark.SetSeatFurniture(_seatFurniture, count);
+            for (int i = 0; i < _children.Length; i++) if (_children[i] != null) _children[i].SetSeatFurniture(_seatFurniture, count);
+        }
+
+        bool HoldsSling(MRUKAnchor anchor, Vector3 sling, Vector3 hero)
+        {
+            if (anchor.IsPositionInVolume(sling, true, 0.05f)) return true; // the Spark at rest, plus its radius
+            // Where a half and a full draw put the Spark: straight ahead and aimed 30 deg to either side.
+            for (int yaw = -30; yaw <= 30; yaw += 30)
+            {
+                Vector3 aim = Quaternion.AngleAxis(yaw, Vector3.up) * hero;
+                if (anchor.IsPositionInVolume(_sling.LaunchPoint(sling, aim, 0.5f), true) ||
+                    anchor.IsPositionInVolume(_sling.LaunchPoint(sling, aim, 1f), true)) return true;
+            }
+            return false;
         }
 
         void OnReseated() => StartCoroutine(PlaceSlingWhenFree());

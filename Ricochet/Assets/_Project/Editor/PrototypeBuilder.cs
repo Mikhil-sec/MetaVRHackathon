@@ -110,6 +110,14 @@ namespace Ricochet.EditorTools
             var shatterRing = Mat("ShatterRing", Shader.Find("Ricochet/Ring"), Color.white);
             shatterRing.SetFloat("_Width", 0.025f);
             Set(fx, "_ringMaterial", shatterRing);
+            var confetti = Mat("ConfettiLight", Shader.Find("Ricochet/SoftParticle"), Color.white); // Fever's flakes
+            confetti.SetFloat("_Shape", 1f);
+            confetti.SetFloat("_Intensity", 1.5f);
+            Set(fx, "_confettiMaterial", confetti);
+            var shell = Mat("FireworkShell", Shader.Find("Ricochet/SoftParticle"), Color.white); // Fever's firework streaks
+            shell.SetFloat("_Intensity", 2.6f);
+            shell.SetFloat("_Core", 1f);
+            Set(fx, "_shellMaterial", shell);
             Set(director, "_fx", fx);
             Set(director, "_popups", Fresh<ScorePopups>(game));
 
@@ -159,6 +167,7 @@ namespace Ricochet.EditorTools
             var encounter = BuildEncounter(game, playArea, director, board, sling, sfx, glow, warp, fx,
                 game.GetComponent<ScorePopups>(), crystalMesh);
             Set(drama, "_encounter", encounter);
+            Set(encounter, "_mood", mood);
             Set(hud, "_encounter", encounter);
             var glyphMat = Mat("IntentGlyph", Shader.Find("Ricochet/IntentGlyph"), Color.white);
             Set(hud, "_glyphMaterial", glyphMat);
@@ -184,6 +193,7 @@ namespace Ricochet.EditorTools
             Set(hud, "_scrimMaterial", scrimMat);
             Set(encounter, "_rewards", rewards);
             Set(hud, "_picker", rewards);
+            Set(sling.GetComponentInChildren<SlingFx>(true), "_picker", rewards);
             Set(hud, "_sling", sling);
 
             // Accessibility: Look and Fire (gaze target, pinch anywhere or look to fire), toggled by the eye glyph.

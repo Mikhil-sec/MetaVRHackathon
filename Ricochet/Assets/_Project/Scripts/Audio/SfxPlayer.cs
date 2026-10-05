@@ -18,6 +18,8 @@ namespace Ricochet.Audio
         AudioClip _riftOpen, _hurt, _bolt, _shieldHit, _guard;
         AudioClip _grab, _twang, _cancel, _swell;
         AudioClip _zip, _sealPop, _shatter, _growl, _emerge;
+        readonly AudioClip[] _sparkles = new AudioClip[3];
+        int _nextSparkle;
 
         /// <summary>The rift's looping hum, for its own spatial source.</summary>
         public AudioClip RiftHum { get; private set; }
@@ -66,6 +68,7 @@ namespace Ricochet.Audio
             _shatter = ChimeSynth.Shatter("Shatter");
             _growl = ChimeSynth.Sweep("Growl", 70f, 150f, 0.55f, 0.55f, 1.2f, 52);
             _emerge = ChimeSynth.Sweep("Emerge", 360f, 85f, 0.8f, 0.6f, 2.5f, 53);
+            for (int i = 0; i < _sparkles.Length; i++) _sparkles[i] = ChimeSynth.Sparkle("Sparkle" + i, RootMidi, 1.4f, 61 + i);
             RiftHum = ChimeSynth.Drone("RiftHum");
             _pullTicks = new AudioClip[PullSteps];
             for (int n = 0; n < PullSteps; n++)
@@ -147,6 +150,13 @@ namespace Ricochet.Audio
 
         /// <summary>The creature breaking apart along its cracks.</summary>
         public void PlayShatter(Vector3 position) => Play(_shatter, position, 1f, Random.Range(0.96f, 1.04f));
+
+        /// <summary>A firework of light confetti: pop, crackle and high pings in the combo's key (3 takes, in turn).</summary>
+        public void PlaySparkle(Vector3 position)
+        {
+            Play(_sparkles[_nextSparkle], position, 0.65f, 1f);
+            _nextSparkle = (_nextSparkle + 1) % _sparkles.Length;
+        }
 
         public void PlayChord(Vector3 position)
         {
